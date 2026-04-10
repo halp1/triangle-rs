@@ -1,0 +1,22 @@
+pub const ROTATION_LEFT: u32 = 1;
+pub const ROTATION_RIGHT: u32 = 2;
+pub const ROTATION_180: u32 = 4;
+pub const ROTATION_SPIN: u32 = 8;
+pub const ROTATION_MINI: u32 = 16;
+pub const ROTATION_SPIN_ALL: u32 = 32;
+
+pub const ROTATION_ALL: u32 =
+  ROTATION_LEFT | ROTATION_RIGHT | ROTATION_180 | ROTATION_SPIN | ROTATION_MINI | ROTATION_SPIN_ALL;
+
+pub const STATE_WALL: u32 = 64;
+pub const STATE_SLEEP: u32 = 128;
+pub const STATE_FLOOR: u32 = 256;
+pub const STATE_NODRAW: u32 = 512;
+
+pub const STATE_ALL: u32 = STATE_WALL | STATE_SLEEP | STATE_FLOOR | STATE_NODRAW;
+
+pub const ACTION_IHS: u32 = 1024;
+pub const ACTION_FORCELOCK: u32 = 2048;
+pub const ACTION_SOFTDROP: u32 = 4096;
+pub const ACTION_MOVE: u32 = 8192;
+pub const ACTION_ROTATE: u32 = 16384;
