@@ -512,6 +512,17 @@ impl Game {
       .emit("game.scope.start", serde_json::json!({ "scopes": ids }));
   }
 
+  /// Request spectation by user ids.
+  pub fn spectate_userids(&self, user_ids: &[String]) {
+    let ids: Vec<u32> = self
+      .players
+      .iter()
+      .filter(|p| user_ids.iter().any(|uid| uid == &p.userid))
+      .map(|p| p.gameid)
+      .collect();
+    self.spectate(&ids);
+  }
+
   /// Request to spectate all players.
   pub fn spectate_all(&self) {
     let ids: Vec<Value> = self
@@ -533,6 +544,17 @@ impl Game {
     self
       .emitter
       .emit("game.scope.end", serde_json::json!({ "scopes": ids }));
+  }
+
+  /// Stop spectating by user ids.
+  pub fn unspectate_userids(&self, user_ids: &[String]) {
+    let ids: Vec<u32> = self
+      .players
+      .iter()
+      .filter(|p| user_ids.iter().any(|uid| uid == &p.userid))
+      .map(|p| p.gameid)
+      .collect();
+    self.unspectate(&ids);
   }
 
   /// Stop spectating all players.

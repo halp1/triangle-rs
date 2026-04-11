@@ -74,3 +74,26 @@ pub struct SetConfigItem {
   pub index: String,
   pub value: serde_json::Value,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+  Default,
+  TetraLeagueSeason1,
+  TetraLeague,
+  Classic,
+  EnforcedDelays,
+  Arcade,
+}
+
+impl Preset {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Preset::Default => "default",
+      Preset::TetraLeagueSeason1 => "tetra league (season 1)",
+      Preset::TetraLeague => "tetra league",
+      Preset::Classic => "classic",
+      Preset::EnforcedDelays => "enforced delays",
+      Preset::Arcade => "arcade",
+    }
+  }
+}

@@ -5,13 +5,13 @@ use serde_json::{Value, json};
 use crate::{
   error::{Result, TriangleError},
   types::social::{
-    Blocked, Config as SocialConfig, Notification, Relationship, RelationshipType, Status,
+    Blocked, Config as SocialConfig, Dm, Notification, Relationship, RelationshipType, Status,
   },
 };
 
 use super::client::Client;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RelationshipEntry {
   pub id: String,
   pub relationship_id: String,
@@ -26,6 +26,13 @@ pub struct Social {
   pub blocked: Vec<Blocked>,
   pub notifications: Vec<Notification>,
   pub config: SocialConfig,
+}
+
+#[derive(Debug, Clone)]
+pub enum RelationshipLookup<'a> {
+  Id(&'a str),
+  Username(&'a str),
+  Any(&'a str),
 }
 
 impl Social {
@@ -115,20 +122,47 @@ impl Social {
   }
 
   pub fn get(&self, target: &str) -> Option<&RelationshipEntry> {
+    self.get_with(RelationshipLookup::Any(target))
+  }
+
+  pub fn get_with(&self, lookup: RelationshipLookup<'_>) -> Option<&RelationshipEntry> {
+    let matches = |r: &RelationshipEntry| match lookup {
+      RelationshipLookup::Id(id) => r.id == id,
+      RelationshipLookup::Username(username) => r.username == username,
+      RelationshipLookup::Any(value) => r.id == value || r.username == value,
+    };
+
     self
       .friends
       .iter()
-      .find(|r| r.id == target || r.username == target)
-      .or_else(|| {
-        self
-          .other
-          .iter()
-          .find(|r| r.id == target || r.username == target)
-      })
+      .find(|r| matches(r))
+      .or_else(|| self.other.iter().find(|r| matches(r)))
+  }
+
+  pub fn snapshot(&self) -> Value {
+    json!({
+      "online": self.online,
+      "friends": self.friends,
+      "others": self.other,
+      "blocked": self.blocked,
+      "notifications": self.notifications,
+      "config": self.config,
+    })
   }
 
   pub async fn resolve(&self, client: &Client, username: &str) -> Result<String> {
     client.api.resolve_user(username).await
+  }
+
+  pub async fn dms_with_user(&self, client: &Client, user_id: &str) -> Result<Vec<Dm>> {
+    client.api.dms(user_id).await
+  }
+
+  pub async fn dms_with(&self, client: &Client, lookup: RelationshipLookup<'_>) -> Result<Vec<Dm>> {
+    let target = self
+      .get_with(lookup)
+      .ok_or_else(|| TriangleError::InvalidArgument("relationship target not found".to_string()))?;
+    self.dms_with_user(client, &target.id).await
   }
 
   pub async fn who(&self, client: &Client, id_or_name: &str) -> Result<crate::types::user::User> {
@@ -136,6 +170,12 @@ impl Social {
   }
 
   pub async fn dm(&self, client: &Client, user_id: &str, message: &str) -> Result<Value> {
+    if user_id == client.user.id {
+      return Err(TriangleError::InvalidArgument(
+        "you can't DM yourself".to_string(),
+      ));
+    }
+
     match client
       .wrap(
         "social.dm",

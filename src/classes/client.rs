@@ -191,6 +191,33 @@ impl Client {
 
   fn init(&self) {
     let emitter = self.ribbon.emitter.clone();
+    self
+      .ribbon
+      .emitter
+      .on("server.announcement", move |data: Value| {
+        let msg = data["msg"].as_str().unwrap_or("").to_string();
+        let announcement_type = data["type"].as_str().unwrap_or("");
+        let reason = data["reason"].as_str().map(str::to_string);
+
+        let color = if announcement_type == "maintenance" {
+          "#FF8A00"
+        } else {
+          "#FFCC00"
+        };
+
+        emitter.emit(
+          "client.notify",
+          serde_json::json!({
+            "msg": msg,
+            "color": color,
+            "icon": "announcement",
+            "type": announcement_type,
+            "reason": reason,
+          }),
+        );
+      });
+
+    let emitter = self.ribbon.emitter.clone();
     self.ribbon.emitter.on("notify", move |data: Value| {
       if data.is_string() {
         emitter.emit("client.notify", serde_json::json!({ "msg": data }));
@@ -214,7 +241,12 @@ impl Client {
           ),
           "announce" => emitter.emit(
             "client.notify",
-            serde_json::json!({ "msg": msg, "color": "#FFCC00", "icon": "announcement" }),
+            serde_json::json!({
+              "msg": msg,
+              "color": "#FFCC00",
+              "icon": "announcement",
+              "reason": data["reason"].as_str().map(str::to_string)
+            }),
           ),
           "ok" => emitter.emit(
             "client.notify",
@@ -477,6 +509,25 @@ impl Client {
     social.dm(self, user_id, message).await
   }
 
+  pub async fn social_dms_with_user(&self, user_id: &str) -> Result<Vec<crate::types::social::Dm>> {
+    let social = self
+      .social
+      .as_ref()
+      .ok_or_else(|| TriangleError::Adapter("social is not initialized".to_string()))?;
+    social.dms_with_user(self, user_id).await
+  }
+
+  pub async fn social_dms_with(
+    &self,
+    lookup: super::social::RelationshipLookup<'_>,
+  ) -> Result<Vec<crate::types::social::Dm>> {
+    let social = self
+      .social
+      .as_ref()
+      .ok_or_else(|| TriangleError::Adapter("social is not initialized".to_string()))?;
+    social.dms_with(self, lookup).await
+  }
+
   pub async fn social_friend(&mut self, user_id: &str) -> Result<bool> {
     let mut social = self
       .social
@@ -542,5 +593,28 @@ impl Client {
     social.mark_notifications_as_read(self);
     self.social = Some(social);
     Ok(())
+  }
+
+  pub fn snapshot(&self) -> Value {
+    let spectating_strategy = match self.spectating_strategy {
+      SpectatingStrategy::Smooth => "smooth",
+      SpectatingStrategy::Instant => "instant",
+    };
+
+    serde_json::json!({
+      "user": {
+        "id": self.user.id,
+        "username": self.user.username,
+        "role": self.user.role,
+        "session_id": self.user.session_id,
+        "user_agent": self.user.user_agent,
+      },
+      "disconnected": self.disconnected,
+      "handling": self.handling,
+      "spectating_strategy": spectating_strategy,
+      "social": self.social.as_ref().map(|s| s.snapshot()),
+      "room": self.room.as_ref().map(|r| r.snapshot()),
+      "has_game": self.game.is_some(),
+    })
   }
 }

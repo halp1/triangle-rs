@@ -7,3 +7,4 @@ pub mod utils;
 
 pub use engine::Engine;
 pub use error::{Result, TriangleError};
+pub use utils::VERSION as version;

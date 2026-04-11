@@ -4,7 +4,7 @@ use crate::{
   error::{Result, TriangleError},
   types::{
     game::Options as GameOptions,
-    room::{Autostart, Match, Player, SetConfigItem, State, Type},
+    room::{Autostart, Match, Player, Preset, SetConfigItem, State, Type},
   },
 };
 
@@ -123,6 +123,37 @@ impl Room {
     }
   }
 
+  pub fn snapshot(&self) -> Value {
+    json!({
+      "id": self.id,
+      "public": self.public,
+      "type": self.room_type,
+      "name": self.name,
+      "name_safe": self.name_safe,
+      "owner": self.owner,
+      "creator": self.creator,
+      "state": self.state,
+      "auto": self.auto,
+      "match": self.match_config,
+      "players": self.players,
+      "userLimit": self.user_limit,
+      "allowChat": self.allow_chat,
+      "allowAnonymous": self.allow_anonymous,
+      "allowUnranked": self.allow_unranked,
+      "allowQueued": self.allow_queued,
+      "allowBots": self.allow_bots,
+      "userRankLimit": self.user_rank_limit,
+      "useBestRankAsLimit": self.use_best_rank_as_limit,
+      "lobbybg": self.lobbybg,
+      "lobbybgm": self.lobbybgm,
+      "gamebgm": self.gamebgm,
+      "forceRequireXPToChat": self.force_require_xp_to_chat,
+      "options": self.options,
+      "game_start": self.game_start,
+      "chats": self.chats,
+    })
+  }
+
   pub fn is_host(&self, user_id: &str) -> bool {
     self.owner == user_id
   }
@@ -188,6 +219,15 @@ impl Room {
     client
       .wrap("room.setconfig", Value::Array(payload), "room.update")
       .await
+  }
+
+  pub async fn use_preset(&self, client: &Client, preset: Preset) -> Result<Value> {
+    let mut options = room_preset_base(preset);
+    options.push(SetConfigItem {
+      index: "options.presets".to_string(),
+      value: Value::String(preset.as_str().to_string()),
+    });
+    self.update(client, &options).await
   }
 
   pub async fn start(&self, client: &Client) -> Result<Value> {
@@ -260,6 +300,132 @@ impl Room {
       )
       .await
   }
+}
+
+fn room_preset_base(preset: Preset) -> Vec<SetConfigItem> {
+  let mut options = vec![
+    SetConfigItem {
+      index: "match.gamemode".to_string(),
+      value: Value::String("versus".to_string()),
+    },
+    SetConfigItem {
+      index: "options.stock".to_string(),
+      value: json!(0),
+    },
+    SetConfigItem {
+      index: "options.boardwidth".to_string(),
+      value: json!(10),
+    },
+    SetConfigItem {
+      index: "options.boardheight".to_string(),
+      value: json!(20),
+    },
+    SetConfigItem {
+      index: "options.usebombs".to_string(),
+      value: json!(false),
+    },
+  ];
+
+  match preset {
+    Preset::Default => {
+      options.extend([
+        SetConfigItem {
+          index: "match.modename".to_string(),
+          value: Value::String("VERSUS".to_string()),
+        },
+        SetConfigItem {
+          index: "match.ft".to_string(),
+          value: json!(1),
+        },
+        SetConfigItem {
+          index: "options.spinbonuses".to_string(),
+          value: Value::String("T-spins".to_string()),
+        },
+      ]);
+    }
+    Preset::TetraLeagueSeason1 => {
+      options.extend([
+        SetConfigItem {
+          index: "match.modename".to_string(),
+          value: Value::String("TETRA LEAGUE".to_string()),
+        },
+        SetConfigItem {
+          index: "match.ft".to_string(),
+          value: json!(7),
+        },
+        SetConfigItem {
+          index: "options.roundmode".to_string(),
+          value: Value::String("down".to_string()),
+        },
+      ]);
+    }
+    Preset::TetraLeague => {
+      options.extend([
+        SetConfigItem {
+          index: "match.modename".to_string(),
+          value: Value::String("TETRA LEAGUE".to_string()),
+        },
+        SetConfigItem {
+          index: "match.ft".to_string(),
+          value: json!(7),
+        },
+        SetConfigItem {
+          index: "options.spinbonuses".to_string(),
+          value: Value::String("all-mini+".to_string()),
+        },
+      ]);
+    }
+    Preset::Classic => {
+      options.extend([
+        SetConfigItem {
+          index: "match.modename".to_string(),
+          value: Value::String("CLASSIC VERSUS".to_string()),
+        },
+        SetConfigItem {
+          index: "options.bagtype".to_string(),
+          value: Value::String("classic".to_string()),
+        },
+        SetConfigItem {
+          index: "options.spinbonuses".to_string(),
+          value: Value::String("none".to_string()),
+        },
+      ]);
+    }
+    Preset::EnforcedDelays => {
+      options.extend([
+        SetConfigItem {
+          index: "match.modename".to_string(),
+          value: Value::String("VERSUS".to_string()),
+        },
+        SetConfigItem {
+          index: "match.ft".to_string(),
+          value: json!(2),
+        },
+        SetConfigItem {
+          index: "options.garbageblocking".to_string(),
+          value: Value::String("limited blocking".to_string()),
+        },
+      ]);
+    }
+    Preset::Arcade => {
+      options.extend([
+        SetConfigItem {
+          index: "match.modename".to_string(),
+          value: Value::String("ARCADE VERSUS".to_string()),
+        },
+        SetConfigItem {
+          index: "options.display_hold".to_string(),
+          value: json!(false),
+        },
+        SetConfigItem {
+          index: "options.nextcount".to_string(),
+          value: json!(1),
+        },
+      ]);
+    }
+  }
+
+  options
 }
 
 fn merge_options(dst: &mut GameOptions, src: GameOptions) {
