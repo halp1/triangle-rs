@@ -254,6 +254,7 @@ impl Room {
       players,
       &client.user.id,
       strategy,
+      client.ribbon.make_send_fn(),
     ));
     Ok(spectate_data)
   }

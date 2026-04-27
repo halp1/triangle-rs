@@ -9,9 +9,7 @@ pub mod logger;
 pub mod theorypack;
 
 pub use adapters::{Adapter, AdapterInfo, AdapterIo, AdapterIoConfig, AdapterKey, AdapterMove};
-pub use api::Api;
 pub use bot_wrapper::{BotWrapper, BotWrapperConfig};
-pub use constants::{CONSTANTS, USER_AGENT};
 pub use docs::{doc_link, troubleshooting_doc_link};
 pub use events::EventEmitter;
 pub use jwt::{parse_token, parse_token_payload};

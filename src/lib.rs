@@ -1,3 +1,4 @@
+pub mod macros;
 pub mod channel;
 pub mod classes;
 pub mod engine;

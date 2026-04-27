@@ -394,6 +394,7 @@ impl Client {
       players,
       &self.user.id,
       self.spectating_strategy.clone(),
+      self.ribbon.make_send_fn(),
     ));
 
     Ok(())
@@ -416,6 +417,7 @@ impl Client {
       players,
       &self.user.id,
       self.spectating_strategy.clone(),
+      self.ribbon.make_send_fn(),
     ));
 
     Ok(data)

@@ -1,40 +1,50 @@
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
+use tokio::sync::{Mutex, oneshot};
+use tokio::time::Instant as TokioInstant;
 
 use crate::{
   engine::{
-    AllowedOptions, B2bCharging, B2bOptions, Engine, EngineInitParams,
+    AllowedOptions, B2bCharging, B2bOptions, Engine, EngineInitParams, EngineSnapshot, EngineStats,
     GameOptions as EngineGameOptions, HandlingOptions, IgeData, IgeFrame, IncreasableValue,
-    KeyEvent, MiscOptions, MovementOptions, MultiplayerOptions, PcOptions, ReplayFrame,
-    board::BoardInitParams,
+    InputKeys, InputState, InputTime, KeyEvent, MiscOptions, MovementOptions, MultiplayerOptions,
+    PcOptions, PracticeState, ReplayFrame, ResCache, ShiftState, SpikeState,
+    board::{BoardInitParams, CONN_ALL, Tile},
     garbage::{
-      GarbageCapParams, GarbageQueueInitParams, GarbageSpeedParams, MessinessParams,
-      MultiplierParams, RoundingMode as GarbageRoundingMode,
+      GarbageCapParams, GarbageQueueInitParams, GarbageQueueSnapshot, GarbageSpeedParams,
+      IncomingGarbage, MessinessParams, MultiplierParams, OutgoingGarbage,
+      RoundingMode as GarbageRoundingMode,
     },
-    queue::{QueueInitParams, bag::BagType},
+    multiplayer::{GarbageRecord, IgeHandlerSnapshot, PlayerData},
+    queue::{
+      QueueInitParams, QueueSnapshot,
+      bag::{BagSnapshot, BagType},
+      types::Mino,
+    },
+    utils::{damage_calc::SpinType, tetromino::TetrominoSnapshot},
   },
   error::Result,
-  types::game::{Options as GameOptions, RoundingMode},
+  types::{
+    events::wrapper::{
+      ClientGameOver, ClientGameRoundStart, GameClientEvent, GameOverKind, GameReplayFrame,
+      RawTickFn, TickInput, TickKeypress, TickKeypressKind, TickOutput, TickSetter,
+    },
+    game::{Options as GameOptions, RoundingMode},
+  },
   utils::EventEmitter,
 };
 
 pub const FPS: f64 = 60.0;
+const FPM: i32 = 12;
+const MAX_IGE_TIMEOUT_MS: u128 = 30_000;
 
-#[derive(Debug, Clone)]
-pub enum SelfKeyEventType {
-  Keydown,
-  Keyup,
-}
+pub type RoundStartHandler = Arc<dyn Fn(TickSetter, Arc<Mutex<Engine>>) + Send + Sync>;
+pub type RoundStartHandlers = Arc<Mutex<Vec<RoundStartHandler>>>;
 
-#[derive(Debug, Clone)]
-pub struct SelfKeyEvent {
-  pub event_type: SelfKeyEventType,
-  pub frame: f64,
-  pub key: String,
-  pub subframe: f64,
-}
+// ── Enums / simple structs ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub enum TargetStrategy {
@@ -45,14 +55,18 @@ pub enum TargetStrategy {
   Manual(u32),
 }
 
-/// How to process spectated replay frames.
+impl Default for TargetStrategy {
+  fn default() -> Self {
+    Self::Even
+  }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpectatingStrategy {
   Smooth,
   Instant,
 }
 
-/// Spectation state of a player.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpectatingState {
   Inactive,
@@ -60,7 +74,6 @@ pub enum SpectatingState {
   Active,
 }
 
-/// Raw player entry from `game.ready`/`game.spectate` payloads.
 #[derive(Debug, Clone)]
 pub struct RawPlayer {
   pub gameid: u32,
@@ -68,100 +81,644 @@ pub struct RawPlayer {
   pub options: GameOptions,
 }
 
-/// A spectated opponent.
+// ── Player ────────────────────────────────────────────────────────────────────
+
+struct PlayerInner {
+  queue: Vec<GameReplayFrame>,
+  state: SpectatingState,
+  resolvers: Vec<oneshot::Sender<()>>,
+  topped_out: bool,
+}
+
 pub struct Player {
   pub name: String,
   pub gameid: u32,
   pub userid: String,
-  pub engine: Engine,
-  pub state: SpectatingState,
-  frame_queue: Vec<Value>,
+  pub engine: Arc<Mutex<Engine>>,
+  inner: Arc<Mutex<PlayerInner>>,
+  strategy: Arc<Mutex<SpectatingStrategy>>,
+  _handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl Player {
-  fn new(raw: &RawPlayer, all_players: &[RawPlayer]) -> Self {
-    let engine = create_engine(&raw.options, raw.gameid, all_players);
-    Self {
+  pub(crate) fn new(
+    raw: &RawPlayer,
+    all_players: &[RawPlayer],
+    emitter: Arc<EventEmitter>,
+    strategy: SpectatingStrategy,
+  ) -> Self {
+    let engine = Arc::new(Mutex::new(create_engine(
+      &raw.options,
+      raw.gameid,
+      all_players,
+    )));
+    let inner = Arc::new(Mutex::new(PlayerInner {
+      queue: Vec::new(),
+      state: SpectatingState::Inactive,
+      resolvers: Vec::new(),
+      topped_out: false,
+    }));
+    let strategy_arc = Arc::new(Mutex::new(strategy));
+    let gameid = raw.gameid;
+    let init_c = engine.blocking_lock().initializer.clone();
+    let mut handles = Vec::new();
+
+    // game.replay.state: apply server-side snapshot
+    {
+      let inner_c = inner.clone();
+      let engine_c = engine.clone();
+      let handle = emitter.on("game.replay.state", move |data: Value| {
+        let ev_gameid = data["gameid"].as_u64().unwrap_or(0) as u32;
+        if ev_gameid != gameid {
+          return;
+        }
+        let inner_c = inner_c.clone();
+        let engine_c = engine_c.clone();
+        let init_c = init_c.clone();
+        tokio::spawn(async move {
+          let mut lock = inner_c.lock().await;
+          let state_data = &data["data"];
+          let frame = state_data["frame"].as_i64().unwrap_or(0) as i32;
+          let game_val = &state_data["game"];
+
+          for tx in lock.resolvers.drain(..) {
+            let _ = tx.send(());
+          }
+          lock.state = SpectatingState::Active;
+
+          if !game_val.is_null() && game_val.is_object() {
+            let snap = snapshot_from_state(frame, &init_c, game_val);
+            let mut eng = engine_c.lock().await;
+            eng.from_snapshot(&snap, false);
+          }
+        });
+      });
+      handles.push(handle);
+    }
+
+    // game.replay: queue incoming frames
+    {
+      let inner_c = inner.clone();
+      let handle = emitter.on("game.replay", move |data: Value| {
+        let ev_gameid = data["gameid"].as_u64().unwrap_or(0) as u32;
+        if ev_gameid != gameid {
+          return;
+        }
+        let frames_arr = data["frames"].as_array().cloned().unwrap_or_default();
+        let frames: Vec<GameReplayFrame> = frames_arr
+          .iter()
+          .filter_map(|f| serde_json::from_value(f.clone()).ok())
+          .collect();
+        let inner_c = inner_c.clone();
+        tokio::spawn(async move {
+          let mut lock = inner_c.lock().await;
+          if lock.state != SpectatingState::Active || lock.topped_out {
+            return;
+          }
+          lock.queue.extend(frames);
+        });
+      });
+      handles.push(handle);
+    }
+
+    Player {
       name: raw.options.username.clone().unwrap_or_default(),
       gameid: raw.gameid,
       userid: raw.userid.clone(),
       engine,
-      state: SpectatingState::Inactive,
-      frame_queue: Vec::new(),
+      inner,
+      strategy: strategy_arc,
+      _handles: handles,
     }
   }
 
-  /// Queue an incoming replay frame for this player.
-  pub fn push_frame(&mut self, frame: Value) {
-    self.frame_queue.push(frame);
+  pub async fn spectate(&self, emitter: &Arc<EventEmitter>) -> oneshot::Receiver<()> {
+    let (tx, rx) = oneshot::channel();
+    let mut lock = self.inner.lock().await;
+    if lock.state == SpectatingState::Active {
+      let _ = tx.send(());
+      return rx;
+    }
+    lock.resolvers.push(tx);
+    if lock.state == SpectatingState::Inactive {
+      lock.state = SpectatingState::Waiting;
+      emitter.emit("game.scope.start", serde_json::json!(self.gameid));
+    }
+    rx
   }
 
-  /// Process queued frames, per strategy.
-  pub fn tick(&mut self, strategy: &SpectatingStrategy) {
-    if self.state != SpectatingState::Active {
+  pub async fn unspectate(&self, emitter: &Arc<EventEmitter>) {
+    let mut lock = self.inner.lock().await;
+    if lock.state == SpectatingState::Inactive {
       return;
     }
-    match strategy {
-      SpectatingStrategy::Smooth => {
-        if self.frame_queue.len() > 20 {
-          self.frame_queue.clear();
-        } else if let Some(frame) = self.frame_queue.first().cloned() {
-          self.frame_queue.remove(0);
-          self.apply_frame(&frame);
+    emitter.emit("game.scope.end", serde_json::json!(self.gameid));
+    lock.state = SpectatingState::Inactive;
+    lock.queue.clear();
+  }
+
+  pub(crate) async fn _tick(&self) {
+    let mut lock = self.inner.lock().await;
+    if lock.state != SpectatingState::Active || lock.topped_out {
+      return;
+    }
+    let strategy = self.strategy.lock().await.clone();
+    let mut eng = self.engine.lock().await;
+
+    let tick_once = |queue: &mut Vec<GameReplayFrame>, eng: &mut Engine| {
+      let engine_frame = eng.frame;
+      let mut frames: Vec<ReplayFrame> = Vec::new();
+      while queue
+        .first()
+        .map(|f| f.frame <= engine_frame)
+        .unwrap_or(false)
+      {
+        let f = queue.remove(0);
+        if let Some(rf) = grf_to_replay_frame(&f) {
+          frames.push(rf);
         }
       }
+      let res = eng.tick(&frames);
+      let topped = eng.events.iter().any(|e| {
+        if let crate::engine::EngineEvent::FallingLock(lr) = e {
+          lr.topout
+        } else {
+          false
+        }
+      });
+      topped
+    };
+
+    match strategy {
       SpectatingStrategy::Instant => {
-        let frames: Vec<Value> = self.frame_queue.drain(..).collect();
-        for frame in frames {
-          self.apply_frame(&frame);
+        while lock.queue.iter().any(|f| f.frame > eng.frame) {
+          if tick_once(&mut lock.queue, &mut eng) {
+            lock.topped_out = true;
+            break;
+          }
+        }
+      }
+      SpectatingStrategy::Smooth => {
+        if lock.queue.is_empty() {
+          return;
+        }
+        let last_frame = lock.queue.last().map(|f| f.frame).unwrap_or(0);
+        while lock.queue.iter().any(|f| f.frame > eng.frame) && eng.frame < last_frame - 20 {
+          if tick_once(&mut lock.queue, &mut eng) {
+            lock.topped_out = true;
+            return;
+          }
+        }
+        if lock.queue.iter().any(|f| f.frame > eng.frame) {
+          tick_once(&mut lock.queue, &mut eng);
         }
       }
     }
   }
 
-  fn apply_frame(&mut self, frame: &Value) {
-    let replay_frames = parse_replay_frames(frame);
-    self.engine.tick(&replay_frames);
+  pub async fn set_strategy(&self, strategy: SpectatingStrategy) {
+    *self.strategy.lock().await = strategy;
   }
 }
 
-fn parse_replay_frames(frame: &Value) -> Vec<ReplayFrame> {
-  let mut result = Vec::new();
-  let frame_type = frame["type"].as_str().unwrap_or("");
-  let subframe = frame["data"]["subframe"].as_f64().unwrap_or(0.0);
-
-  match frame_type {
+fn grf_to_replay_frame(f: &GameReplayFrame) -> Option<ReplayFrame> {
+  let subframe = f.data["subframe"].as_f64().unwrap_or(0.0);
+  match f.kind.as_str() {
     "keydown" => {
-      let key = frame["data"]["key"].as_str().unwrap_or("").to_string();
-      result.push(ReplayFrame::Keydown(KeyEvent {
+      let key = f.data["key"].as_str().unwrap_or("").to_string();
+      Some(ReplayFrame::Keydown(KeyEvent {
         subframe,
         key,
         hoisted: false,
-      }));
+      }))
     }
     "keyup" => {
-      let key = frame["data"]["key"].as_str().unwrap_or("").to_string();
-      result.push(ReplayFrame::Keyup(KeyEvent {
+      let key = f.data["key"].as_str().unwrap_or("").to_string();
+      Some(ReplayFrame::Keyup(KeyEvent {
         subframe,
         key,
         hoisted: false,
-      }));
+      }))
     }
-    "ige" => {
-      if let Some(ige_data) = parse_ige_data(frame, subframe) {
-        result.push(ReplayFrame::Ige(ige_data));
-      }
-    }
-    _ => {}
+    "ige" => parse_ige_frame(&f.data, subframe).map(ReplayFrame::Ige),
+    _ => None,
   }
-  result
 }
 
-fn parse_ige_data(frame: &Value, subframe: f64) -> Option<IgeFrame> {
-  let ige_type = frame["data"]["type"].as_str()?;
-  let data = match ige_type {
+// ── Self_ ─────────────────────────────────────────────────────────────────────
+
+pub struct Self_ {
+  pub gameid: u32,
+  pub engine: Arc<Mutex<Engine>>,
+  pub options: GameOptions,
+  pub can_target: Arc<Mutex<bool>>,
+  pub server_targets: Arc<Mutex<Vec<u32>>>,
+  pub enemies: Arc<Mutex<Vec<u32>>>,
+  pub target: Arc<Mutex<TargetStrategy>>,
+  pub pause_iges: Arc<Mutex<bool>>,
+  pub force_pause_iges: Arc<Mutex<bool>>,
+  pub key_queue: Arc<Mutex<Vec<TickKeypress>>>,
+  ige_queue: Arc<Mutex<Vec<Value>>>,
+  tick_fn: Arc<Mutex<Option<RawTickFn>>>,
+  send_fn: Arc<dyn Fn(String, Value) + Send + Sync>,
+  emitter: Arc<EventEmitter>,
+  round_start_handlers: RoundStartHandlers,
+  _handles: Vec<tokio::task::JoinHandle<()>>,
+}
+
+impl Self_ {
+  pub(crate) fn new(
+    raw: &RawPlayer,
+    all_players: &[RawPlayer],
+    send_fn: Arc<dyn Fn(String, Value) + Send + Sync>,
+    emitter: Arc<EventEmitter>,
+    round_start_handlers: RoundStartHandlers,
+  ) -> Self {
+    let engine = Arc::new(Mutex::new(create_engine(
+      &raw.options,
+      raw.gameid,
+      all_players,
+    )));
+    let gameid = raw.gameid;
+    let ige_queue: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let can_target = Arc::new(Mutex::new(true));
+    let server_targets: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+    let mut handles = Vec::new();
+
+    // game.replay.ige: collect server IGEs
+    {
+      let ige_queue_c = ige_queue.clone();
+      let can_target_c = can_target.clone();
+      let server_targets_c = server_targets.clone();
+      let handle = emitter.on("game.replay.ige", move |data: Value| {
+        let ev_gameid = data["gameid"].as_u64().unwrap_or(0) as u32;
+        if ev_gameid != gameid {
+          return;
+        }
+        let iges = data["iges"].as_array().cloned().unwrap_or_default();
+        let ige_queue_c = ige_queue_c.clone();
+        let can_target_c = can_target_c.clone();
+        let server_targets_c = server_targets_c.clone();
+        tokio::spawn(async move {
+          let mut q = ige_queue_c.lock().await;
+          for ige in &iges {
+            match ige["type"].as_str().unwrap_or("") {
+              "allow_targeting" => {
+                *can_target_c.lock().await = ige["data"]["value"].as_bool().unwrap_or(true);
+              }
+              "target" => {
+                let targets: Vec<u32> = ige["data"]["targets"]
+                  .as_array()
+                  .map(|a| {
+                    a.iter()
+                      .filter_map(|v| v.as_u64().map(|n| n as u32))
+                      .collect()
+                  })
+                  .unwrap_or_default();
+                *server_targets_c.lock().await = targets;
+              }
+              _ => {}
+            }
+            q.push(ige.clone());
+          }
+        });
+      });
+      handles.push(handle);
+    }
+
+    Self_ {
+      gameid,
+      engine,
+      options: raw.options.clone(),
+      can_target,
+      server_targets,
+      enemies: Arc::new(Mutex::new(Vec::new())),
+      target: Arc::new(Mutex::new(TargetStrategy::Even)),
+      pause_iges: Arc::new(Mutex::new(false)),
+      force_pause_iges: Arc::new(Mutex::new(false)),
+      key_queue: Arc::new(Mutex::new(Vec::new())),
+      ige_queue,
+      tick_fn: Arc::new(Mutex::new(None)),
+      send_fn,
+      emitter,
+      round_start_handlers,
+      _handles: handles,
+    }
+  }
+
+  pub(crate) fn init(&self) {
+    let engine = self.engine.clone();
+    let tick_fn = self.tick_fn.clone();
+    let send_fn = self.send_fn.clone();
+    let ige_queue = self.ige_queue.clone();
+    let key_queue = self.key_queue.clone();
+    let can_target = self.can_target.clone();
+    let server_targets = self.server_targets.clone();
+    let enemies = self.enemies.clone();
+    let target = self.target.clone();
+    let pause_iges = self.pause_iges.clone();
+    let force_pause_iges = self.force_pause_iges.clone();
+    let round_start_handlers = self.round_start_handlers.clone();
+    let emitter = self.emitter.clone();
+    let options = self.options.clone();
+    let gameid = self.gameid;
+
+    let emitter_c = emitter.clone();
+    let handle = emitter.on("game.start", move |_: Value| {
+      let engine = engine.clone();
+      let tick_fn = tick_fn.clone();
+      let send_fn = send_fn.clone();
+      let ige_queue = ige_queue.clone();
+      let key_queue = key_queue.clone();
+      let can_target = can_target.clone();
+      let server_targets = server_targets.clone();
+      let enemies = enemies.clone();
+      let target = target.clone();
+      let pause_iges = pause_iges.clone();
+      let force_pause_iges = force_pause_iges.clone();
+      let round_start_handlers = round_start_handlers.clone();
+      let emitter = emitter_c.clone();
+      let options = options.clone();
+      tokio::spawn(async move {
+        let delay_ms = options.countdown_count.unwrap_or(5) as u64
+          * options.countdown_interval.unwrap_or(600.0) as u64
+          + options.precountdown.unwrap_or(750.0) as u64
+          + options.prestart.unwrap_or(0.0) as u64;
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+
+        // notify round-start handlers
+        let setter = TickSetter::new(tick_fn.clone());
+        let handlers = round_start_handlers.lock().await.clone();
+        for h in &handlers { h(setter.clone(), engine.clone()); }
+        emitter.emit("client.game.round.start", serde_json::json!("round_start"));
+
+        let mut frame_queue: Vec<Value> = Vec::new();
+        let mut message_queue: Vec<GameClientEvent> = Vec::new();
+        let mut incoming_ige_frames: Vec<ReplayFrame> = Vec::new();
+        let start_time = TokioInstant::now();
+        let mut last_ige_flush = TokioInstant::now();
+        let mut slow_tick_warned = false;
+        let mut over = false;
+
+        frame_queue.push(serde_json::json!({ "type": "start", "frame": 0, "data": {} }));
+        frame_queue.push(make_full_frame(&options));
+
+        loop {
+          if over { break; }
+
+          // ── User tick ──────────────────────────────────────────────────
+          let snapshot = { engine.lock().await.snapshot(false) };
+          let engine_frame = { engine.lock().await.frame };
+          let events: Vec<GameClientEvent> = message_queue.drain(..).collect();
+          let c_can_target = *can_target.lock().await;
+          let c_server_targets = server_targets.lock().await.clone();
+          let c_enemies = enemies.lock().await.clone();
+
+          let tick_input = TickInput {
+            gameid,
+            frame: engine_frame,
+            events,
+            engine: engine.clone(),
+            can_target: c_can_target,
+            server_targets: c_server_targets,
+            enemies: c_enemies,
+            key_queue: key_queue.clone(),
+            target: target.clone(),
+            pause_iges: pause_iges.clone(),
+            force_pause_iges: force_pause_iges.clone(),
+          };
+
+          let out = {
+            let guard = tick_fn.lock().await;
+            if let Some(f) = guard.as_ref() {
+              let fut = f(tick_input);
+              drop(guard);
+              fut.await
+            } else {
+              drop(guard);
+              TickOutput::default()
+            }
+          };
+
+          // restore engine (user may have mutated)
+          { engine.lock().await.from_snapshot(&snapshot, false); }
+
+          let run_after = out.run_after.unwrap_or_default();
+          if let Some(keys) = out.keys {
+            let mut kq = key_queue.lock().await;
+            for k in keys {
+              if is_valid_key(&k, engine_frame) { kq.push(k); }
+            }
+          }
+
+          if over { break; }
+
+          // ── First IGE flush ────────────────────────────────────────────
+          {
+            let kq_len = key_queue.lock().await.len();
+            let p = *pause_iges.lock().await;
+            let fp = *force_pause_iges.lock().await;
+            let subframe = engine.lock().await.subframe;
+            do_flush_iges(&ige_queue, &mut incoming_ige_frames, subframe, p, fp, kq_len, &mut last_ige_flush).await;
+          }
+
+          // ── Collect keys for this frame ────────────────────────────────
+          let engine_frame = engine.lock().await.frame;
+          let frame_keys: Vec<TickKeypress> = {
+            let mut kq = key_queue.lock().await;
+            let mut out_keys = Vec::new();
+            let mut i = kq.len();
+            while i > 0 {
+              i -= 1;
+              if kq[i].frame.floor() as i32 == engine_frame {
+                out_keys.push(kq.remove(i));
+              }
+            }
+            out_keys.reverse();
+            out_keys
+          };
+
+          // ── Engine tick ────────────────────────────────────────────────
+          let ige_frames: Vec<ReplayFrame> = incoming_ige_frames.drain(..).collect();
+          let mut replay_frames: Vec<ReplayFrame> = ige_frames;
+          for k in &frame_keys {
+            let event = KeyEvent { subframe: k.data.subframe, key: k.data.key.clone(), hoisted: false };
+            replay_frames.push(match k.kind { TickKeypressKind::Keydown => ReplayFrame::Keydown(event), TickKeypressKind::Keyup => ReplayFrame::Keyup(event) });
+          }
+
+          let res = { engine.lock().await.tick(&replay_frames) };
+
+          // topout?
+          {
+            let eng = engine.lock().await;
+            let topped = eng.events.iter().any(|e| {
+              if let crate::engine::EngineEvent::FallingLock(lr) = e { lr.topout } else { false }
+            });
+            if topped { over = true; }
+          }
+
+          // push garbage events
+          for g in &res.garbage_received {
+            message_queue.push(GameClientEvent::Garbage { frame: g.frame, amount: g.amount, size: g.size, id: g.id, column: g.column });
+          }
+
+          // add keys to frame_queue
+          for k in &frame_keys {
+            let kind_str = match k.kind { TickKeypressKind::Keydown => "keydown", TickKeypressKind::Keyup => "keyup" };
+            frame_queue.push(serde_json::json!({ "type": kind_str, "frame": engine_frame, "data": { "key": k.data.key, "subframe": k.data.subframe } }));
+          }
+
+          let engine_frame_post = engine.lock().await.frame;
+
+          // ── Every FPM frames: send game.replay ────────────────────────
+          if engine_frame_post != 0 && engine_frame_post % FPM == 0 {
+            let manual_allowed = options.manual_allowed.unwrap_or(true);
+            let c_can = *can_target.lock().await;
+            let frames = flush_frame_queue(&mut frame_queue, engine_frame_post, c_can, manual_allowed);
+            if !frames.is_empty() {
+              send_fn("game.replay".to_string(), serde_json::json!({ "gameid": gameid, "provisioned": engine_frame_post, "frames": frames.clone() }));
+              let grf_frames: Vec<GameReplayFrame> = frames.into_iter().filter_map(|f| serde_json::from_value(f).ok()).collect();
+              message_queue.push(GameClientEvent::Frameset { provisioned: engine_frame_post, frames: grf_frames });
+            }
+          }
+
+          // ── run_after ──────────────────────────────────────────────────
+          for f in &run_after { f(); }
+
+          // ── Second IGE flush ───────────────────────────────────────────
+          {
+            let kq_len = key_queue.lock().await.len();
+            let p = *pause_iges.lock().await;
+            let fp = *force_pause_iges.lock().await;
+            let subframe = engine.lock().await.subframe;
+            do_flush_iges(&ige_queue, &mut incoming_ige_frames, subframe, p, fp, kq_len, &mut last_ige_flush).await;
+          }
+
+          if over { break; }
+
+          // ── Timing ────────────────────────────────────────────────────
+          let elapsed_ms = start_time.elapsed().as_millis() as f64;
+          let target_ms = ((engine_frame_post + 1) as f64 / FPS) * 1000.0 - elapsed_ms;
+          if target_ms <= -2000.0 && !slow_tick_warned {
+            eprintln!("[triangle-rs] WARNING: Game tick lagging by more than 2 seconds!");
+            slow_tick_warned = true;
+          }
+          if target_ms <= 0.0 && engine_frame_post % (FPS as i32 / 2) != 0 {
+            tokio::task::yield_now().await;
+            continue;
+          }
+          if target_ms > 0.0 {
+            tokio::time::sleep(Duration::from_millis(target_ms as u64)).await;
+          } else {
+            tokio::task::yield_now().await;
+          }
+        } // end loop
+      });
+    });
+    std::mem::forget(handle);
+  }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+async fn do_flush_iges(
+  ige_queue: &Arc<Mutex<Vec<Value>>>,
+  incoming: &mut Vec<ReplayFrame>,
+  subframe: f64,
+  pause: bool,
+  force_pause: bool,
+  kq_len: usize,
+  last_flush: &mut TokioInstant,
+) {
+  let paused = force_pause || (pause && kq_len > 0);
+  if paused && last_flush.elapsed().as_millis() < MAX_IGE_TIMEOUT_MS {
+    return;
+  }
+  let iges: Vec<Value> = ige_queue.lock().await.drain(..).collect();
+  for ige in iges {
+    if let Some(frame) = parse_ige_frame(&ige, subframe) {
+      incoming.push(ReplayFrame::Ige(frame));
+    }
+  }
+  *last_flush = TokioInstant::now();
+}
+
+fn flush_frame_queue(
+  frame_queue: &mut Vec<Value>,
+  engine_frame: i32,
+  can_target: bool,
+  manual_allowed: bool,
+) -> Vec<Value> {
+  let mut frames: Vec<Value> = frame_queue
+    .drain(..)
+    .filter(|f| f["frame"].as_i64().unwrap_or(0) <= engine_frame as i64)
+    .collect();
+  if !can_target {
+    frames.retain(|f| {
+      let t = f["type"].as_str().unwrap_or("");
+      t != "strategy" && t != "manual_target"
+    });
+  }
+  if !manual_allowed {
+    frames.retain(|f| f["type"].as_str().unwrap_or("") != "manual_target");
+  }
+  if let Some(idx) = frames
+    .iter()
+    .position(|f| f["type"].as_str() == Some("full"))
+  {
+    let full = frames.remove(idx);
+    frames.insert(0, full);
+  }
+  if let Some(idx) = frames
+    .iter()
+    .position(|f| f["type"].as_str() == Some("start"))
+  {
+    let start = frames.remove(idx);
+    frames.insert(0, start);
+  }
+  frames
+}
+
+fn make_full_frame(options: &GameOptions) -> Value {
+  let bw = options.boardwidth.unwrap_or(10) as usize;
+  let bh = options.boardheight.unwrap_or(20) as usize;
+  serde_json::json!({
+    "type": "full", "frame": 0,
+    "data": { "game": {
+      "board": (0..bh + 20).map(|_| (0..bw).map(|_| Value::Null).collect::<Vec<_>>()).collect::<Vec<_>>(),
+      "g": options.g.unwrap_or(0.02),
+      "playing": true
+    }}
+  })
+}
+
+fn is_valid_key(k: &TickKeypress, engine_frame: i32) -> bool {
+  const VALID_KEYS: &[&str] = &[
+    "moveLeft",
+    "moveRight",
+    "hardDrop",
+    "hold",
+    "softDrop",
+    "rotateCW",
+    "rotate180",
+    "rotateCCW",
+    "undo",
+    "redo",
+    "retry",
+  ];
+  k.frame >= engine_frame as f64
+    && VALID_KEYS.contains(&k.data.key.as_str())
+    && k.data.subframe >= 0.0
+    && k.data.subframe.is_finite()
+    && k.frame.is_finite()
+}
+
+fn parse_ige_frame(data: &Value, subframe: f64) -> Option<IgeFrame> {
+  let ige_type = data["type"].as_str()?;
+  let d = &data["data"];
+  let inner = match ige_type {
     "target" => {
-      let targets: Vec<i32> = frame["data"]["data"]["targets"]
+      let targets: Vec<i32> = d["targets"]
         .as_array()
         .map(|a| {
           a.iter()
@@ -171,302 +728,166 @@ fn parse_ige_data(frame: &Value, subframe: f64) -> Option<IgeFrame> {
         .unwrap_or_default();
       IgeData::Target { targets }
     }
-    "interaction" | "interaction_confirm" => {
-      let d = &frame["data"]["data"];
-      IgeData::GarbageInteraction {
-        gameid: d["gameid"].as_i64().unwrap_or(0) as i32,
-        ackiid: d["ackiid"].as_i64().unwrap_or(0) as i32,
-        iid: d["iid"].as_i64().unwrap_or(0) as i32,
-        amt: d["amt"].as_i64().unwrap_or(0) as i32,
-        size: d["size"].as_u64().unwrap_or(0) as usize,
-      }
-    }
+    "interaction" | "interaction_confirm" => IgeData::GarbageInteraction {
+      gameid: d["gameid"].as_i64().unwrap_or(0) as i32,
+      ackiid: d["ackiid"].as_i64().unwrap_or(0) as i32,
+      iid: d["iid"].as_i64().unwrap_or(0) as i32,
+      amt: d["amt"].as_i64().unwrap_or(0) as i32,
+      size: d["size"].as_u64().unwrap_or(0) as usize,
+    },
     _ => return None,
   };
-  Some(IgeFrame { subframe, data })
-}
-
-/// The client's own live game state (when the client is playing, not spectating).
-pub struct Self_ {
-  pub gameid: u32,
-  pub engine: Engine,
-  pub options: GameOptions,
-  pub server_targets: Vec<u32>,
-  pub enemies: Vec<u32>,
-  pub can_target: bool,
-  pub pause_iges: bool,
-  pub force_pause_iges: bool,
-  pub key_queue: Vec<SelfKeyEvent>,
-  pub frame_queue: Vec<Value>,
-  pub message_queue: Vec<Value>,
-  pub ige_queue: Vec<Value>,
-  pub incoming_ige_frames: Vec<ReplayFrame>,
-  pub target: TargetStrategy,
-  pub start_time: Option<Instant>,
-  pub last_ige_flush: Instant,
-}
-
-impl Self_ {
-  pub fn new(self_player: &RawPlayer, all_players: &[RawPlayer]) -> Self {
-    let engine = create_engine(&self_player.options, self_player.gameid, all_players);
-    Self_ {
-      gameid: self_player.gameid,
-      engine,
-      options: self_player.options.clone(),
-      server_targets: Vec::new(),
-      enemies: Vec::new(),
-      can_target: true,
-      pause_iges: false,
-      force_pause_iges: false,
-      key_queue: Vec::new(),
-      frame_queue: Vec::new(),
-      message_queue: Vec::new(),
-      ige_queue: Vec::new(),
-      incoming_ige_frames: Vec::new(),
-      target: TargetStrategy::Even,
-      start_time: None,
-      last_ige_flush: Instant::now(),
-    }
-  }
-
-  pub fn init(&mut self) {
-    self.start_time = Some(Instant::now());
-    self.frame_queue.push(get_full_frame(&self.options));
-  }
-
-  pub fn queue_key(&mut self, event: SelfKeyEvent) {
-    if event.frame >= self.engine.frame as f64 {
-      self.key_queue.push(event);
-    }
-  }
-
-  pub fn queue_ige(&mut self, ige: Value) {
-    self.ige_queue.push(ige);
-    self.flush_iges();
-  }
-
-  pub fn set_target(&mut self, target: TargetStrategy) -> Result<()> {
-    if !self.can_target {
-      return Err(crate::error::TriangleError::InvalidArgument(
-        "targeting not allowed".to_string(),
-      ));
-    }
-
-    let frame = self.engine.frame;
-    let replay = match target {
-      TargetStrategy::Manual(id) => {
-        serde_json::json!({ "type": "manual_target", "frame": frame, "data": id })
-      }
-      TargetStrategy::Even => {
-        serde_json::json!({ "type": "strategy", "frame": frame, "data": 0 })
-      }
-      TargetStrategy::Elims => {
-        serde_json::json!({ "type": "strategy", "frame": frame, "data": 1 })
-      }
-      TargetStrategy::Random => {
-        serde_json::json!({ "type": "strategy", "frame": frame, "data": 2 })
-      }
-      TargetStrategy::Payback => {
-        serde_json::json!({ "type": "strategy", "frame": frame, "data": 3 })
-      }
-    };
-
-    self.target = target;
-    self.frame_queue.push(replay);
-    Ok(())
-  }
-
-  pub fn tick(&mut self) -> Value {
-    self.flush_iges();
-
-    let mut replay_frames = self
-      .incoming_ige_frames
-      .drain(..)
-      .collect::<Vec<ReplayFrame>>();
-
-    let mut keys_this_frame = Vec::new();
-    for idx in (0..self.key_queue.len()).rev() {
-      let key = &self.key_queue[idx];
-      if key.frame.floor() as i32 == self.engine.frame {
-        keys_this_frame.push(self.key_queue.remove(idx));
-      }
-    }
-    keys_this_frame.reverse();
-
-    for key in &keys_this_frame {
-      let frame = match key.event_type {
-        SelfKeyEventType::Keydown => ReplayFrame::Keydown(KeyEvent {
-          subframe: key.subframe,
-          key: key.key.clone(),
-          hoisted: false,
-        }),
-        SelfKeyEventType::Keyup => ReplayFrame::Keyup(KeyEvent {
-          subframe: key.subframe,
-          key: key.key.clone(),
-          hoisted: false,
-        }),
-      };
-      replay_frames.push(frame);
-      self.frame_queue.push(serde_json::json!({
-                "type": match key.event_type { SelfKeyEventType::Keydown => "keydown", SelfKeyEventType::Keyup => "keyup" },
-                "frame": self.engine.frame,
-                "data": { "key": key.key, "subframe": key.subframe }
-            }));
-    }
-
-    let res = self.engine.tick(&replay_frames);
-
-    for g in res.garbage_received {
-      self.message_queue.push(serde_json::json!({
-          "type": "garbage",
-          "frame": g.frame,
-          "amount": g.amount,
-          "size": g.size,
-          "id": g.id,
-          "column": g.column
-      }));
-    }
-
-    let provisioned = self.engine.frame;
-    if provisioned != 0 && provisioned % 12 == 0 {
-      let mut frames: Vec<Value> = self
-        .frame_queue
-        .drain(..)
-        .filter(|f| f["frame"].as_i64().unwrap_or(0) <= provisioned as i64)
-        .collect();
-
-      if let Some(full_idx) = frames
-        .iter()
-        .position(|f| f["type"].as_str() == Some("full"))
-      {
-        let full = frames.remove(full_idx);
-        frames.insert(0, full);
-      }
-
-      if let Some(start_idx) = frames
-        .iter()
-        .position(|f| f["type"].as_str() == Some("start"))
-      {
-        let start = frames.remove(start_idx);
-        frames.insert(0, start);
-      }
-
-      let frameset = serde_json::json!({
-          "gameid": self.gameid,
-          "provisioned": provisioned,
-          "frames": frames
-      });
-
-      self.message_queue.push(serde_json::json!({
-          "type": "frameset",
-          "provisioned": provisioned,
-          "frames": frameset["frames"].clone()
-      }));
-
-      return frameset;
-    }
-
-    serde_json::json!({
-        "gameid": self.gameid,
-        "provisioned": provisioned,
-        "frames": []
-    })
-  }
-
-  fn iges_paused(&self) -> bool {
-    self.force_pause_iges || (self.pause_iges && !self.key_queue.is_empty())
-  }
-
-  fn flush_iges(&mut self) {
-    if self.iges_paused() && self.last_ige_flush.elapsed() < Duration::from_secs(30) {
-      return;
-    }
-
-    let iges = self.ige_queue.drain(..).collect::<Vec<Value>>();
-    for ige in iges {
-      if let Some(frame) = parse_ige_data(&serde_json::json!({ "data": ige }), self.engine.subframe)
-      {
-        if let IgeData::Target { targets } = &frame.data {
-          self.server_targets = targets.iter().map(|x| *x as u32).collect();
-        }
-        self.incoming_ige_frames.push(ReplayFrame::Ige(frame));
-      }
-    }
-
-    self.last_ige_flush = Instant::now();
-  }
-}
-
-fn get_full_frame(options: &GameOptions) -> Value {
-  let boardwidth = options.boardwidth.unwrap_or(10) as usize;
-  let boardheight = options.boardheight.unwrap_or(20) as usize;
-  serde_json::json!({
-      "type": "full",
-      "frame": 0,
-      "data": {
-          "game": {
-              "board": (0..boardheight + 20).map(|_| (0..boardwidth).map(|_| Value::Null).collect::<Vec<Value>>()).collect::<Vec<Vec<Value>>>(),
-              "g": options.g.unwrap_or(0.02),
-              "playing": true
-          }
-      }
+  Some(IgeFrame {
+    subframe,
+    data: inner,
   })
 }
 
-/// Manages live game spectation / participation.
+// ── Game ───────────────────────────────────────────────────────────────────────
+
 pub struct Game {
-  /// The players in the game (opponents being spectated).
   pub players: Vec<Player>,
-  /// The raw player list from the server.
   pub raw_players: Vec<RawPlayer>,
-  /// The client's own game state (if the client is a participant).
   pub self_: Option<Self_>,
-  /// The spectating strategy for opponent renders.
   pub spectating_strategy: SpectatingStrategy,
   emitter: Arc<EventEmitter>,
-  _handle: tokio::task::JoinHandle<()>,
+  round_start_handlers: RoundStartHandlers,
+  _spectate_handle: tokio::task::JoinHandle<()>,
 }
 
 impl Game {
-  /// Create from a `game.ready` payload.
   pub fn new(
     emitter: Arc<EventEmitter>,
     raw_players: Vec<RawPlayer>,
     self_userid: &str,
     spectating_strategy: SpectatingStrategy,
+    send_fn: Arc<dyn Fn(String, Value) + Send + Sync>,
   ) -> Self {
+    let round_start_handlers: RoundStartHandlers = Arc::new(Mutex::new(Vec::new()));
+
     let self_ = raw_players
       .iter()
       .find(|p| p.userid == self_userid)
-      .map(|p| Self_::new(p, &raw_players));
+      .map(|p| {
+        let s = Self_::new(
+          p,
+          &raw_players,
+          send_fn,
+          emitter.clone(),
+          round_start_handlers.clone(),
+        );
+        s.init();
+        s
+      });
 
     let players: Vec<Player> = raw_players
       .iter()
-      .filter(|p| p.userid != self_userid)
-      .map(|p| Player::new(p, &raw_players))
+      .map(|p| {
+        Player::new(
+          p,
+          &raw_players,
+          emitter.clone(),
+          spectating_strategy.clone(),
+        )
+      })
       .collect();
 
-    let emitter_c = emitter.clone();
-    let handle = tokio::spawn(async move {
-      let interval = tokio::time::Duration::from_micros((1_000_000.0 / FPS) as u64);
-      let mut tick = tokio::time::interval(interval);
-      loop {
-        tick.tick().await;
-        emitter_c.emit("game.tick", Value::Null);
-      }
-    });
+    let player_arcs: Vec<_> = players
+      .iter()
+      .map(|p| (p.inner.clone(), p.engine.clone(), p.strategy.clone()))
+      .collect();
 
-    Self {
+    let spectate_handle = {
+      let interval = Duration::from_micros((1_000_000.0 / FPS) as u64);
+      tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        loop {
+          ticker.tick().await;
+          for (inner, engine, strategy) in &player_arcs {
+            let state = { inner.lock().await.state.clone() };
+            if state != SpectatingState::Active {
+              continue;
+            }
+            let topped_out = { inner.lock().await.topped_out };
+            if topped_out {
+              continue;
+            }
+            let strategy_val = strategy.lock().await.clone();
+            let mut lock = inner.lock().await;
+            let mut eng = engine.lock().await;
+
+            let tick_once_fn = |queue: &mut Vec<GameReplayFrame>, eng: &mut Engine| -> bool {
+              let engine_frame = eng.frame;
+              let mut frames: Vec<ReplayFrame> = Vec::new();
+              while queue
+                .first()
+                .map(|f| f.frame <= engine_frame)
+                .unwrap_or(false)
+              {
+                let f = queue.remove(0);
+                if let Some(rf) = grf_to_replay_frame(&f) {
+                  frames.push(rf);
+                }
+              }
+              let _ = eng.tick(&frames);
+              eng.events.iter().any(|e| {
+                if let crate::engine::EngineEvent::FallingLock(lr) = e {
+                  lr.topout
+                } else {
+                  false
+                }
+              })
+            };
+
+            match strategy_val {
+              SpectatingStrategy::Instant => {
+                while lock.queue.iter().any(|f| f.frame > eng.frame) {
+                  if tick_once_fn(&mut lock.queue, &mut eng) {
+                    lock.topped_out = true;
+                    break;
+                  }
+                }
+              }
+              SpectatingStrategy::Smooth => {
+                if lock.queue.is_empty() {
+                  continue;
+                }
+                let last_frame = lock.queue.last().map(|f| f.frame).unwrap_or(0);
+                while lock.queue.iter().any(|f| f.frame > eng.frame) && eng.frame < last_frame - 20
+                {
+                  if tick_once_fn(&mut lock.queue, &mut eng) {
+                    lock.topped_out = true;
+                    break;
+                  }
+                }
+                if !lock.topped_out && lock.queue.iter().any(|f| f.frame > eng.frame) {
+                  tick_once_fn(&mut lock.queue, &mut eng);
+                }
+              }
+            }
+          }
+        }
+      })
+    };
+
+    Game {
       players,
       raw_players,
       self_,
       spectating_strategy,
       emitter,
-      _handle: handle,
+      round_start_handlers,
+      _spectate_handle: spectate_handle,
     }
   }
 
-  /// Get the opponents (players who are not the client).
+  pub fn on_round_start<F>(&self, f: F)
+  where
+    F: Fn(TickSetter, Arc<Mutex<Engine>>) + Send + Sync + 'static,
+  {
+    self.round_start_handlers.blocking_lock().push(Arc::new(f));
+  }
+
   pub fn opponents<'a>(&'a self, self_userid: &str) -> Vec<&'a Player> {
     self
       .players
@@ -475,33 +896,6 @@ impl Game {
       .collect()
   }
 
-  /// Tick all players (process queued replay frames).
-  pub fn tick(&mut self) {
-    let strategy = self.spectating_strategy.clone();
-    for player in &mut self.players {
-      player.tick(&strategy);
-    }
-  }
-
-  /// Deliver a `game.replay` event frame to the relevant player(s).
-  pub fn deliver_replay_frame(&mut self, gameid: u32, frame: Value) {
-    if let Some(player) = self.players.iter_mut().find(|p| p.gameid == gameid) {
-      player.push_frame(frame);
-    }
-  }
-
-  /// Mark a player as actively being spectated.
-  pub fn set_player_spectating(&mut self, gameid: u32, active: bool) {
-    if let Some(player) = self.players.iter_mut().find(|p| p.gameid == gameid) {
-      player.state = if active {
-        SpectatingState::Active
-      } else {
-        SpectatingState::Inactive
-      };
-    }
-  }
-
-  /// Request spectation of specific targets by gameid.
   pub fn spectate(&self, game_ids: &[u32]) {
     let ids: Vec<Value> = game_ids
       .iter()
@@ -512,18 +906,6 @@ impl Game {
       .emit("game.scope.start", serde_json::json!({ "scopes": ids }));
   }
 
-  /// Request spectation by user ids.
-  pub fn spectate_userids(&self, user_ids: &[String]) {
-    let ids: Vec<u32> = self
-      .players
-      .iter()
-      .filter(|p| user_ids.iter().any(|uid| uid == &p.userid))
-      .map(|p| p.gameid)
-      .collect();
-    self.spectate(&ids);
-  }
-
-  /// Request to spectate all players.
   pub fn spectate_all(&self) {
     let ids: Vec<Value> = self
       .players
@@ -535,7 +917,6 @@ impl Game {
       .emit("game.scope.start", serde_json::json!({ "scopes": ids }));
   }
 
-  /// Stop spectating specific targets.
   pub fn unspectate(&self, game_ids: &[u32]) {
     let ids: Vec<Value> = game_ids
       .iter()
@@ -546,18 +927,6 @@ impl Game {
       .emit("game.scope.end", serde_json::json!({ "scopes": ids }));
   }
 
-  /// Stop spectating by user ids.
-  pub fn unspectate_userids(&self, user_ids: &[String]) {
-    let ids: Vec<u32> = self
-      .players
-      .iter()
-      .filter(|p| user_ids.iter().any(|uid| uid == &p.userid))
-      .map(|p| p.gameid)
-      .collect();
-    self.unspectate(&ids);
-  }
-
-  /// Stop spectating all players.
   pub fn unspectate_all(&self) {
     let ids: Vec<Value> = self
       .players
@@ -568,9 +937,305 @@ impl Game {
       .emitter
       .emit("game.scope.end", serde_json::json!({ "scopes": ids }));
   }
+
+  pub fn spectate_userids(&self, user_ids: &[String]) {
+    let ids: Vec<u32> = self
+      .players
+      .iter()
+      .filter(|p| user_ids.iter().any(|uid| uid == &p.userid))
+      .map(|p| p.gameid)
+      .collect();
+    self.spectate(&ids);
+  }
+
+  pub fn unspectate_userids(&self, user_ids: &[String]) {
+    let ids: Vec<u32> = self
+      .players
+      .iter()
+      .filter(|p| user_ids.iter().any(|uid| uid == &p.userid))
+      .map(|p| p.gameid)
+      .collect();
+    self.unspectate(&ids);
+  }
+
+  pub fn set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
+    self.spectating_strategy = strategy;
+  }
+
+  pub fn deliver_replay_frame(&mut self, _gameid: u32, _frame: Value) {}
+
+  pub fn set_player_spectating(&mut self, _gameid: u32, _active: bool) {}
 }
 
-/// Build an engine from TETR.IO game options.
+// ── snapshotFromState ─────────────────────────────────────────────────────────
+
+pub fn snapshot_from_state(frame: i32, init: &EngineInitParams, state: &Value) -> EngineSnapshot {
+  let board_height = init.board.height;
+  let full_height = (board_height + 20) as f64;
+
+  // board (server: bottom-to-top; engine: top-to-bottom)
+  let board: Vec<Vec<Option<Tile>>> = state["board"]
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+    .into_iter()
+    .rev()
+    .map(|row| {
+      row
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|sq| {
+          sq.as_str().and_then(parse_mino_str).map(|mino| Tile {
+            mino,
+            connections: CONN_ALL,
+          })
+        })
+        .collect()
+    })
+    .collect();
+
+  let falling = &state["falling"];
+  let fl_flags = falling["flags"].as_u64().unwrap_or(0) as u32;
+  let fl_x = falling["x"].as_f64().unwrap_or(0.0);
+  let fl_y = falling["y"].as_f64().unwrap_or(0.0);
+  let fl_hy = falling["hy"].as_f64().unwrap_or(0.0);
+  let fl_type = parse_mino_str(falling["type"].as_str().unwrap_or("")).unwrap_or(Mino::I);
+  let fl_r = falling["r"].as_i64().unwrap_or(0) as u8;
+
+  use crate::engine::constants::{ROTATION_MINI, ROTATION_SPIN};
+  let last_spin = if fl_flags & ROTATION_SPIN != 0 {
+    Some(SpinType::Normal)
+  } else if !(fl_flags as i32) & (ROTATION_SPIN | ROTATION_MINI) as i32 == 0 {
+    Some(SpinType::Mini)
+  } else {
+    None
+  };
+
+  let queue_pieces: Vec<Mino> = state["bag"]
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+    .iter()
+    .filter_map(|m| parse_mino_str(m.as_str().unwrap_or("")))
+    .collect();
+  let bag_extra: Vec<Mino> = state["bagex"]
+    .as_array()
+    .cloned()
+    .unwrap_or_default()
+    .iter()
+    .filter_map(|m| parse_mino_str(m.as_str().unwrap_or("")))
+    .collect();
+  let bag_snap = BagSnapshot {
+    rng: state["rng"].as_i64().unwrap_or(0),
+    id: state["bagid"].as_u64().unwrap_or(0),
+    extra: bag_extra,
+    last_generated: state["lastGenerated"].as_str().and_then(parse_mino_str),
+  };
+  let queue_snap = QueueSnapshot {
+    value: queue_pieces,
+    bag: bag_snap,
+  };
+
+  let garbage_speed = init.garbage.garbage.speed;
+  let impending = state["impendingdamage"]
+    .as_array()
+    .cloned()
+    .unwrap_or_default();
+  let waiting_frames = state["waitingframes"]
+    .as_array()
+    .cloned()
+    .unwrap_or_default();
+  let garbage_queue: Vec<IncomingGarbage> = impending
+    .iter()
+    .map(|g| {
+      let g_id = g["id"].as_i64().unwrap_or(0);
+      let confirmed_frame = waiting_frames.iter().find_map(|wf| {
+        if wf["type"].as_str() == Some("incoming-attack-hit") && wf["data"].as_i64() == Some(g_id) {
+          wf["target"].as_i64().map(|t| t as i32)
+        } else {
+          None
+        }
+      });
+      IncomingGarbage {
+        frame: confirmed_frame.unwrap_or(i32::MAX - garbage_speed),
+        amount: g["amt"].as_i64().unwrap_or(0) as i32,
+        size: g["size"].as_u64().unwrap_or(0) as usize,
+        cid: g["cid"].as_i64().unwrap_or(0) as i32,
+        gameid: g["gameid"].as_i64().unwrap_or(0) as i32,
+        confirmed: confirmed_frame.is_some(),
+      }
+    })
+    .collect();
+
+  let garbage_snap = GarbageQueueSnapshot {
+    seed: state["rngex"].as_i64().unwrap_or(0),
+    last_tank_time: state["lasttanktime"].as_i64().unwrap_or(0) as i32,
+    last_column: state["lastcolumn"].as_i64().map(|v| v as i32),
+    sent: state["stats"]["garbage"]["sent"].as_i64().unwrap_or(0) as i32,
+    has_changed_column: state["haschangedcolumn"].as_bool().unwrap_or(false),
+    last_received_count: state["lastreceivedcount"].as_i64().unwrap_or(0) as i32,
+    queue: garbage_queue,
+  };
+
+  let ack = &state["garbageacknowledgements"];
+  let inc_ack = ack["incoming"].as_object().cloned().unwrap_or_default();
+  let out_ack = ack["outgoing"].as_object().cloned().unwrap_or_default();
+  let all_pids: std::collections::HashSet<String> =
+    inc_ack.keys().chain(out_ack.keys()).cloned().collect();
+  let mut ige_players: HashMap<i32, PlayerData> = HashMap::new();
+  for pid_str in &all_pids {
+    let pid: i32 = pid_str.parse().unwrap_or(0);
+    let inc = inc_ack.get(pid_str).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let outgoing: Vec<GarbageRecord> = out_ack
+      .get(pid_str)
+      .and_then(|v| v.as_array())
+      .cloned()
+      .unwrap_or_default()
+      .iter()
+      .map(|o| GarbageRecord {
+        iid: o["iid"].as_i64().unwrap_or(0) as i32,
+        amount: o["amt"].as_i64().unwrap_or(0) as i32,
+      })
+      .collect();
+    ige_players.insert(
+      pid,
+      PlayerData {
+        incoming: inc,
+        outgoing,
+      },
+    );
+  }
+
+  let ls = &state["lShift"];
+  let rs = &state["rShift"];
+  let time_obj = &state["time"];
+  let input = InputState {
+    l_shift: ShiftState {
+      held: ls["held"].as_bool().unwrap_or(false),
+      arr: ls["arr"].as_f64().unwrap_or(0.0),
+      das: ls["das"].as_f64().unwrap_or(0.0),
+      dir: ls["dir"].as_i64().unwrap_or(-1) as i32,
+    },
+    r_shift: ShiftState {
+      held: rs["held"].as_bool().unwrap_or(false),
+      arr: rs["arr"].as_f64().unwrap_or(0.0),
+      das: rs["das"].as_f64().unwrap_or(0.0),
+      dir: rs["dir"].as_i64().unwrap_or(1) as i32,
+    },
+    last_shift: state["lastshift"].as_i64().unwrap_or(-1) as i32,
+    keys: InputKeys {
+      soft_drop: state["inputSoftdrop"].as_bool().unwrap_or(false),
+      rotate_ccw: state["inputRotateCCW"].as_bool().unwrap_or(false),
+      rotate_cw: state["inputRotateCW"].as_bool().unwrap_or(false),
+      rotate_180: state["inputRotate180"].as_bool().unwrap_or(false),
+      hold: state["inputHold"].as_bool().unwrap_or(false),
+    },
+    first_input_time: state["firstInputTime"].as_f64().unwrap_or(0.0),
+    time: crate::engine::InputTime {
+      start: time_obj["start"].as_f64().unwrap_or(0.0),
+      zero: time_obj["zero"].as_bool().unwrap_or(false),
+      locked: time_obj["locked"].as_bool().unwrap_or(false),
+      prev: time_obj["prev"].as_f64().unwrap_or(0.0),
+    },
+    last_piece_time: state["lastpiecetime"].as_f64().unwrap_or(0.0),
+  };
+
+  let stats_v = &state["stats"];
+  let spike_v = &state["spike"];
+  let targets = state["targets"].as_array().map(|a| {
+    a.iter()
+      .filter_map(|v| v.as_i64().map(|n| n as i32))
+      .collect()
+  });
+  let hold = state["hold"].as_str().and_then(parse_mino_str);
+
+  EngineSnapshot {
+    is_undo_redo: false,
+    board,
+    falling: TetrominoSnapshot {
+      symbol: fl_type,
+      location: [fl_x, full_height - fl_y],
+      locking: falling["locking"].as_f64().unwrap_or(0.0),
+      lock_resets: falling["lockresets"].as_i64().unwrap_or(0) as i32,
+      rot_resets: falling["rotresets"].as_i64().unwrap_or(0) as i32,
+      safe_lock: falling["safelock"].as_i64().unwrap_or(0) as i32,
+      highest_y: full_height - fl_hy,
+      rotation: fl_r,
+      falling_rotations: 0,
+      total_rotations: state["totalRotations"].as_i64().unwrap_or(0) as i32,
+      irs: falling["irs"].as_i64().unwrap_or(0) as i32,
+      ihs: false,
+      aox: 0,
+      aoy: 0,
+      keys: falling["keys"].as_i64().unwrap_or(0) as i32,
+    },
+    frame,
+    garbage: garbage_snap,
+    hold,
+    hold_locked: state["holdlocked"].as_bool().unwrap_or(false),
+    last_spin,
+    last_was_clear: state["lastwasclear"].as_bool().unwrap_or(false),
+    queue: queue_snap.clone(),
+    inner_queue: queue_snap,
+    input,
+    subframe: state["subframe"].as_f64().unwrap_or(0.0),
+    targets,
+    stats: EngineStats {
+      garbage_sent: stats_v["garbage"]["sent"].as_i64().unwrap_or(0) as i32,
+      garbage_attack: stats_v["garbage"]["attack"].as_i64().unwrap_or(0) as i32,
+      garbage_receive: stats_v["garbage"]["received"].as_i64().unwrap_or(0) as i32,
+      garbage_cleared: stats_v["garbage"]["cleared"].as_i64().unwrap_or(0) as i32,
+      combo: stats_v["combo"].as_i64().unwrap_or(0) as i32,
+      b2b: stats_v["btb"].as_i64().unwrap_or(0) as i32,
+      pieces: stats_v["piecesplaced"].as_i64().unwrap_or(0) as i32,
+      lines: stats_v["lines"].as_i64().unwrap_or(0) as i32,
+    },
+    glock: state["glock"].as_f64().unwrap_or(0.0),
+    stock: state["stock"].as_i64().unwrap_or(0) as i32,
+    state: fl_flags,
+    spike: SpikeState {
+      count: spike_v["count"].as_i64().unwrap_or(0) as i32,
+      timer: spike_v["timer"].as_i64().unwrap_or(0) as i32,
+    },
+    time_frame_offset: state["time"]["frameoffset"].as_i64().unwrap_or(0) as i32,
+    res_cache: ResCache {
+      pieces: 0,
+      garbage_sent: Vec::new(),
+      garbage_received: Vec::new(),
+      keys: Vec::new(),
+      last_lock: 0.0,
+    },
+    practice: PracticeState {
+      undo: Vec::new(),
+      redo: Vec::new(),
+      retry: false,
+      retry_iter: 0,
+      last_piece: None,
+    },
+    ige: IgeHandlerSnapshot {
+      iid: state["interactionid"].as_i64().unwrap_or(0) as i32,
+      players: ige_players,
+    },
+  }
+}
+
+fn parse_mino_str(s: &str) -> Option<Mino> {
+  match s.to_uppercase().as_str() {
+    "I" => Some(Mino::I),
+    "J" => Some(Mino::J),
+    "L" => Some(Mino::L),
+    "O" => Some(Mino::O),
+    "S" => Some(Mino::S),
+    "T" => Some(Mino::T),
+    "Z" => Some(Mino::Z),
+    _ => None,
+  }
+}
+
+// ── Engine builder ─────────────────────────────────────────────────────────────
+
 pub fn create_engine(options: &GameOptions, gameid: u32, all_players: &[RawPlayer]) -> Engine {
   let board_width = options.boardwidth.unwrap_or(10) as usize;
   let board_height = options.boardheight.unwrap_or(20) as usize;

@@ -1,6 +1,7 @@
 pub mod client;
 pub mod game;
 pub mod ribbon;
+pub mod ribbon2;
 pub mod room;
 pub mod social;
 
