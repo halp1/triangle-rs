@@ -4,9 +4,9 @@ use serde_json::{Value, json};
 
 use crate::{
   error::{Result, TriangleError},
-  types::social::{
+  types::{events::recv::client::Ready, social::{
     Blocked, Config as SocialConfig, Dm, Notification, Relationship, RelationshipType, Status,
-  },
+  }},
 };
 
 use super::client::Client;
@@ -36,9 +36,9 @@ pub enum RelationshipLookup<'a> {
 }
 
 impl Social {
-  pub fn new(user: &super::client::ClientUser, config: SocialConfig, init_data: &Value) -> Self {
-    let social = &init_data["social"];
-    let self_id = &user.id;
+  pub fn new(user: super::client::ClientUser, config: SocialConfig, init_data: Ready) -> Self {
+    let social = init_data.social;
+    let self_id = user.id;
 
     let total_online = social["total_online"].as_u64().unwrap_or(0);
     let notifications: Vec<Notification> = social["notifications"]

@@ -61,7 +61,72 @@ pub struct Records {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Me {}
+pub struct Totp {
+  pub enabled: Option<bool>,
+  pub codes_remaining: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct User {}
+pub struct Me {
+  #[serde(rename = "_id")]
+  pub id: String,
+  pub username: String,
+  pub country: Option<String>,
+  pub email: Option<String>,
+  pub role: Role,
+  pub ts: String,
+  pub badges: Vec<Badge>,
+  pub xp: u64,
+  pub privacy_showwon: bool,
+  pub privacy_showplayed: bool,
+  pub privacy_showgametime: bool,
+  pub privacy_showcountry: bool,
+  pub privacy_privatemode: String,
+  pub privacy_status_shallow: String,
+  pub privacy_status_deep: String,
+  pub privacy_status_exact: String,
+  pub privacy_dm: String,
+  pub privacy_invite: String,
+  pub thanked: bool,
+  pub banlist: Vec<serde_json::Value>,
+  pub warnings: Vec<serde_json::Value>,
+  pub bannedstatus: String,
+  pub records: Option<Records>,
+  pub supporter: bool,
+  pub supporter_expires: u64,
+  pub total_supported: u64,
+  pub league: League,
+  pub avatar_revision: Option<u64>,
+  pub banner_revision: Option<u64>,
+  pub bio: Option<String>,
+  pub zen: Option<serde_json::Value>,
+  pub distinguishment: Option<serde_json::Value>,
+  pub totp: Totp,
+  pub connections: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+	#[serde(rename = "_id")]
+	pub id: String,
+	pub username: String,
+	pub role: Role,
+	pub ts: String,
+	pub badges: Vec<Badge>,
+	pub xp: u64,
+	pub gamesplayed: u64,
+	pub gameswon: u64,
+	pub gametime: u64,
+	pub country: Option<String>,
+	pub badstanding: bool,
+	pub records: Option<Records>,
+	pub supporter: bool,
+	pub supporter_tier: u64,
+	pub verified: bool,
+	pub league: League,
+	pub avatar_revision: Option<u64>,
+	pub banner_revision: Option<u64>,
+	pub bio: Option<String>,
+	pub friend_count: u64,
+	pub friended_you: bool,
+}

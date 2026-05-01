@@ -23,6 +23,7 @@ impl Default for Config {
   }
 }
 
+#[derive(Debug)]
 pub struct Api {
   pub config: Config,
 
