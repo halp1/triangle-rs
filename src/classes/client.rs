@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::{select, sync::Mutex};
 
 use crate::{
-  classes::ribbon::{self, WrapError},
+  classes::{game::Game, ribbon::{self, WrapError}, room::Room},
   types::{
     events::{recv, send},
     game::{Handling, SpectatingStrategy},

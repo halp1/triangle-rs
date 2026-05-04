@@ -6,6 +6,7 @@ pub mod root;
 pub mod server;
 pub mod social;
 pub mod staff;
+pub mod game;
 
 event!(session => Session {
   ribbonid: String,

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -11,7 +11,10 @@ use crate::{
       send,
     },
     game::Options as GameOptions,
-    room::{Autostart, Match, Player, State, Type},
+    room::{
+      Autostart, Bracket, Match, Player, SetConfigItem, SetConfigItemRaw, SetConfigValue, State,
+      Type,
+    },
   },
   utils::Partial,
 };
@@ -59,7 +62,7 @@ pub struct Room {
 impl Room {
   pub fn new(
     ribbon: Ribbon,
-    game: Arc<Mutex<Game>>,
+    game: Arc<Mutex<Option<Game>>>,
     me: ClientUser,
     update: recv::room::Update,
   ) -> Self {
@@ -214,9 +217,7 @@ impl Room {
           game.destroy().await;
           drop(game);
           ribbon
-            .emit(send::client::game::Over {
-              reason: "leave".to_string(),
-            })
+            .emit(send::client::game::Over::Leave)
             .await;
         }
       })
@@ -229,11 +230,7 @@ impl Room {
         if let Some(game) = self.game.lock().await.take() {
           game.destroy().await;
           drop(game);
-          ribbon
-            .emit(send::client::game::Over {
-              reason: "kick".to_string(),
-            })
-            .await;
+          ribbon.emit(send::client::game::Over::Leave).await;
         }
       })
       .await;
@@ -250,5 +247,164 @@ impl Room {
   pub async fn state(&self) -> RoomState {
     let state = self.state.lock().await.clone();
     state
+  }
+
+  pub async fn kick(&mut self, id: &str) -> Result<recv::room::player::Remove, ribbon::WrapError> {
+    self.kick_with_duration(id, Duration::from_secs(900)).await
+  }
+
+  pub async fn kick_with_duration(
+    &mut self,
+    id: &str,
+    duration: Duration,
+  ) -> Result<recv::room::player::Remove, ribbon::WrapError> {
+    self
+      .hook
+      .wrap::<recv::room::player::Remove>(send::room::Kick {
+        uid: id.to_string(),
+        duration: duration.as_secs_f64(),
+      })
+      .await
+  }
+
+  pub async fn ban(&mut self, id: &str) -> Result<recv::room::player::Remove, ribbon::WrapError> {
+    self
+      .kick_with_duration(id, Duration::from_secs(2592e3 as u64))
+      .await
+  }
+
+  pub async fn unban(&mut self, id: &str) {
+    self.ribbon.emit(send::room::Unban(id.to_string())).await;
+  }
+
+  pub async fn chat(&mut self, message: &str) -> Result<recv::room::Chat, ribbon::WrapError> {
+    self
+      .hook
+      .wrap::<recv::room::Chat>(send::room::Chat {
+        content: message.to_string(),
+        pinned: false,
+      })
+      .await
+  }
+
+  pub async fn chat_pinned(
+    &mut self,
+    message: &str,
+  ) -> Result<recv::room::Chat, ribbon::WrapError> {
+    self
+      .hook
+      .wrap::<recv::room::Chat>(send::room::Chat {
+        content: message.to_string(),
+        pinned: true,
+      })
+      .await
+  }
+
+  pub async fn clear_chat(&mut self) -> Result<recv::room::chat::Clear, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::chat::Clear>(send::room::chat::Clear {})
+      .await
+  }
+
+  pub async fn set_id(&mut self, id: &str) -> Result<recv::room::Update, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::Update>(send::room::SetId(id.to_ascii_uppercase()))
+      .await
+  }
+
+  pub async fn update(
+    &mut self,
+    config: Vec<SetConfigItem>,
+  ) -> Result<recv::room::Update, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::Update>(send::room::SetConfig(
+        config
+          .iter()
+          .map(|item| SetConfigItemRaw {
+            index: item.index.clone(),
+            value: match &item.value {
+              SetConfigValue::String(s) => Value::String(s.clone()),
+              SetConfigValue::Number(n) => Value::String(
+                serde_json::Number::from_f64(*n)
+                  .unwrap_or_else(|| serde_json::Number::from(0))
+                  .to_string(),
+              ),
+              SetConfigValue::Boolean(b) => Value::Number(if *b {
+                serde_json::Number::from(1)
+              } else {
+                serde_json::Number::from(0)
+              }),
+            },
+          })
+          .collect(),
+      ))
+      .await
+  }
+
+  // pub (&mut self, async fn use_preset)
+  // TODO: presets
+
+  pub async fn start(&mut self) -> Result<recv::game::Ready, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::game::Ready>(send::room::Start {})
+      .await
+  }
+
+  pub async fn abort(&mut self) -> Result<recv::game::Abort, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::game::Abort>(send::room::Abort {})
+      .await
+  }
+
+  // TODO: spectating
+
+  pub async fn transfer_host(
+    &mut self,
+    id: &str,
+  ) -> Result<recv::room::update::Host, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::update::Host>(send::room::owner::Transfer(id.to_string()))
+      .await
+  }
+
+  pub async fn take_host(&mut self) -> Result<recv::room::update::Host, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::update::Host>(send::room::owner::Revoke {})
+      .await
+  }
+
+  /// Treats switching to observer as spectator
+  pub async fn switch(
+    &mut self,
+    bracket: Bracket,
+  ) -> Result<recv::room::update::Bracket, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::update::Bracket>(send::room::bracket::Switch(match bracket {
+        Bracket::Observer => Bracket::Spectator,
+        _ => bracket,
+      }))
+      .await
+  }
+
+  pub async fn move_player(
+    &mut self,
+    id: &str,
+    bracket: Bracket,
+  ) -> Result<recv::room::update::Bracket, ribbon::WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::room::update::Bracket>(send::room::bracket::Move {
+        uid: id.to_string(),
+        bracket,
+      })
+      .await
   }
 }

@@ -189,10 +189,23 @@ pub struct SetConfigMatch {
   pub wb: u32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetConfigValue {
+	String(String),
+	Number(f64),
+	Boolean(bool),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetConfigItemRaw {
+	pub index: String,
+	pub value: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct SetConfigItem {
   pub index: String,
-  pub value: Value,
+  pub value: SetConfigValue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

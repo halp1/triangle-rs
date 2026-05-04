@@ -17,19 +17,33 @@ event!(client.close => Close {
 
 event!(client.notify => Notify(String));
 
-// TODO: client.room.players
-
-// TODO: client.room.join
-
 pub mod room {
   use super::*;
+
+  event!(client.room.players => Players(Vec<crate::types::room::Player>));
   event!(client.room.join => Join);
 }
 
 pub mod game {
+  use serde::{Deserialize, Serialize};
+
+  use crate::{types::game::ReplayEndData, utils::events::Event};
+
   use super::*;
   // TODO: client.game.start
-  // TODO: client.game.over
+
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  pub enum Over {
+    End,
+    Leave,
+    Abort,
+    Finish(ReplayEndData),
+  }
+
+  impl Event for Over {
+    const NAME: &'static str = "client.game.over";
+  }
+
   pub mod round {
     use super::*;
     // TODO: client.game.round.start
