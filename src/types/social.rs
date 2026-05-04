@@ -129,10 +129,10 @@ pub mod dm {
 
   #[derive(Debug, Clone, Serialize, Deserialize)]
   pub struct DM {
-    data: Data,
-    stream: String,
-    ts: String,
-    id: String,
+    pub data: Data,
+    pub stream: String,
+    pub ts: String,
+    pub id: String,
   }
 
   #[derive(Debug, Clone, Serialize, Deserialize)]

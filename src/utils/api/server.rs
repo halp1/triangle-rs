@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
-  TriangleError,
   types::server::Environment,
-  utils::api::core::{Request, Transport, get},
+  utils::api::core::{ApiError, Request, Transport, get},
 };
 
 use super::core::RequestSet;
@@ -54,9 +53,9 @@ struct SpoolData {
   flags: SpoolFlags,
 }
 
-fn parse_spool_data(binary: &[u8]) -> crate::Result<SpoolData> {
+fn parse_spool_data(binary: &[u8]) -> Result<SpoolData, ApiError> {
   if binary.len() < 6 {
-    return Err(TriangleError::Api("spool data too short".to_string()));
+    return Err(ApiError::Parse("spool data too short".to_string()));
   }
   Ok(SpoolData {
     flags: SpoolFlags {
@@ -66,7 +65,11 @@ fn parse_spool_data(binary: &[u8]) -> crate::Result<SpoolData> {
   })
 }
 
-async fn get_despool(endpoint: &str, index: usize, user_agent: &str) -> crate::Result<SpoolData> {
+async fn get_despool(
+  endpoint: &str,
+  index: usize,
+  user_agent: &str,
+) -> Result<SpoolData, ApiError> {
   let now = SystemTime::now()
     .duration_since(UNIX_EPOCH)
     .unwrap_or_default()
@@ -80,12 +83,9 @@ async fn get_despool(endpoint: &str, index: usize, user_agent: &str) -> crate::R
     .header("User-Agent", user_agent)
     .send()
     .await
-    .map_err(|e| TriangleError::Api(format!("spool fetch failed: {}", e)))?;
+    .map_err(|e| ApiError::Request(e))?;
 
-  let bytes = res
-    .bytes()
-    .await
-    .map_err(|e| TriangleError::Api(format!("spool read failed: {}", e)))?;
+  let bytes = res.bytes().await.map_err(|e| ApiError::Request(e))?;
 
   parse_spool_data(&bytes)
 }
@@ -109,9 +109,9 @@ impl Server {
         Box::pin(async move {
           let data = get_despool(&spool.host, index, &ua).await?;
           if data.flags.avoid_due_to_high_load || data.flags.recently_restarted {
-            return Err(TriangleError::Api("spool is unstable".to_string()));
+            return Err(ApiError::Server("spool is unstable".to_string()));
           }
-          Ok::<SpoolEntry, TriangleError>(spool)
+          Ok::<SpoolEntry, ApiError>(spool)
         })
       })
       .collect();
@@ -130,7 +130,7 @@ impl Server {
     }
   }
 
-  pub async fn environment(&self) -> crate::Result<Environment> {
+  pub async fn environment(&self) -> Result<Environment, ApiError> {
     get(Request {
       token: self.token.clone(),
       user_agent: self.user_agent.clone(),
@@ -140,7 +140,7 @@ impl Server {
     .await
   }
 
-  pub async fn spool(&self, use_spools: bool) -> crate::Result<SpoolResult> {
+  pub async fn spool(&self, use_spools: bool) -> Result<SpoolResult, ApiError> {
     let res = get::<RibbonResponse>(Request {
       token: self.token.clone(),
       user_agent: self.user_agent.clone(),

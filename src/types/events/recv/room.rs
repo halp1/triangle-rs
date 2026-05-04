@@ -1,5 +1,5 @@
 use crate::macros::event;
-use crate::types::{game, room, user};
+use crate::types::{game, room};
 use serde_json::Value;
 
 event!(room.join => Join {
@@ -65,12 +65,7 @@ impl crate::utils::events::Event for Update {
 pub mod update {
   use super::*;
 
-  event!(room.update.auto => Auto {
-    enabled: bool,
-    status: String,
-    time: f64,
-    maxtime: f64,
-  });
+  event!(room.update.auto => Auto = room::Autostart);
 
   event!(room.update.host => Host(String));
 

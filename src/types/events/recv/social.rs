@@ -19,8 +19,8 @@ event!(social.relationship.remove => Remove(String));
 event!(social.relationship.add => Add = social::relationship::Relationship);
 event!(social.notification => Notification = social::Notification);
 event!(social.invite => Invite {
-	sender: String,
-	roomid: String,
-	roomname: String,
-	roomname_safe: String,
+  sender: String,
+  roomid: String,
+  roomname: String,
+  roomname_safe: String,
 });

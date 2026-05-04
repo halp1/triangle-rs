@@ -4,8 +4,8 @@ pub mod ribbon;
 pub mod room;
 pub mod social;
 
-pub use client::{Client, ClientOptions, ClientUser, GameOptions, TokenOrCredentials};
-pub use game::Game;
+pub use client::{Client, ClientOptions, ClientUser, Credentials, GameOptions};
+// pub use game::Game;
 pub use ribbon::Ribbon;
-pub use room::Room;
+// pub use room::Room;
 pub use social::Social;

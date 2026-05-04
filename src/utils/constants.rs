@@ -1,1 +1,1 @@
-pub const USER_AGENT: &str = "Triangle.rs/4.2.5 (+https://triangle.haelp.dev)";
+pub const USER_AGENT: &str = concat!("triangle-rs/", env!("CARGO_PKG_VERSION"));

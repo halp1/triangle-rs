@@ -13,12 +13,12 @@ event!(social.dm => DM {
 event!(social.invite => Invite(String));
 
 pub mod notification {
-  pub use super::*;
+  use super::*;
 
   event!(social.notification.ack => Ack);
 }
 
 pub mod relation {
-  pub use super::*;
+  use super::*;
   event!(social.relation.ack => Ack);
 }

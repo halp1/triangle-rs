@@ -1,6 +1,6 @@
 macro_rules! event {
 	($($path:ident).+ => $struct_name:ident = $original:path) => {
-		type $struct_name = $original;
+		pub type $struct_name = $original;
 		impl crate::utils::events::Event for $struct_name {
 			const NAME: &'static str = stringify!($($path).+);
 		}
@@ -37,3 +37,42 @@ macro_rules! event {
 }
 
 pub(crate) use event;
+
+#[macro_export]
+macro_rules! partial {
+	(
+		$name:ident {
+			$(
+				$field:ident : $ty:ty
+			),* $(,)?
+		}
+	) => {
+		#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+
+		pub struct $name {
+			$(pub $field: Option<$ty>),*
+		}
+
+		impl crate::utils::Partial for $name {
+			type Target = $name;
+
+			fn merge(self, other: Self) -> Self {
+				Self {
+					$(
+						$field: other.$field.or(self.$field),
+					)*
+				}
+			}
+
+			fn apply(self, target: &mut Self::Target) {
+				$(
+					if let Some(value) = self.$field {
+						target.$field.replace(value);
+					}
+				)*
+			}
+		}
+	};
+}
+
+pub(crate) use partial;

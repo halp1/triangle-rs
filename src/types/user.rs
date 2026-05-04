@@ -32,19 +32,19 @@ pub struct Badge {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct League {
-  pub apm: f64,
+  pub apm: Option<f64>,
   pub decaying: bool,
   pub gamesplayed: u32,
   pub gameswon: u32,
   pub glicko: f64,
   pub gxe: f64,
-  pub pps: f64,
+  pub pps: Option<f64>,
   pub rank: String,
   pub rd: f64,
-  pub standing: u32,
-  pub standing_local: u32,
+  pub standing: i32,
+  pub standing_local: i32,
   pub tr: f64,
-  pub vs: f64,
+  pub vs: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,26 +107,26 @@ pub struct Me {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-	#[serde(rename = "_id")]
-	pub id: String,
-	pub username: String,
-	pub role: Role,
-	pub ts: String,
-	pub badges: Vec<Badge>,
-	pub xp: u64,
-	pub gamesplayed: u64,
-	pub gameswon: u64,
-	pub gametime: u64,
-	pub country: Option<String>,
-	pub badstanding: bool,
-	pub records: Option<Records>,
-	pub supporter: bool,
-	pub supporter_tier: u64,
-	pub verified: bool,
-	pub league: League,
-	pub avatar_revision: Option<u64>,
-	pub banner_revision: Option<u64>,
-	pub bio: Option<String>,
-	pub friend_count: u64,
-	pub friended_you: bool,
+  #[serde(rename = "_id")]
+  pub id: String,
+  pub username: String,
+  pub role: Role,
+  pub ts: String,
+  pub badges: Vec<Badge>,
+  pub xp: u64,
+  pub gamesplayed: u64,
+  pub gameswon: u64,
+  pub gametime: u64,
+  pub country: Option<String>,
+  pub badstanding: bool,
+  pub records: Option<Records>,
+  pub supporter: bool,
+  pub supporter_tier: u64,
+  pub verified: bool,
+  pub league: League,
+  pub avatar_revision: Option<u64>,
+  pub banner_revision: Option<u64>,
+  pub bio: Option<String>,
+  pub friend_count: u64,
+  pub friended_you: bool,
 }

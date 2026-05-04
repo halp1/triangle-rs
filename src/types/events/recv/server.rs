@@ -7,7 +7,6 @@ event!(server.authorize => Authorize {
   maintenance: bool,
   worker: server::Worker,
   social: social::Summary,
-	relationships: Vec<social::relationship::Relationship>,
 });
 
 event!(server.migrate => Migrate {

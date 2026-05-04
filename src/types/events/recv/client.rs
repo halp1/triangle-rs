@@ -12,7 +12,7 @@ event!(client.error => Error(String));
 event!(client.dead => Dead(String));
 
 event!(client.close => Close {
-	reason: String,
+  reason: String,
 });
 
 event!(client.notify => Notify(String));
@@ -22,16 +22,16 @@ event!(client.notify => Notify(String));
 // TODO: client.room.join
 
 pub mod room {
-  pub use super::*;
+  use super::*;
   event!(client.room.join => Join);
 }
 
 pub mod game {
-  pub use super::*;
+  use super::*;
   // TODO: client.game.start
   // TODO: client.game.over
   pub mod round {
-    pub use super::*;
+    use super::*;
     // TODO: client.game.round.start
     event!(client.game.round.end => End(Option<String>));
   }
@@ -40,7 +40,7 @@ pub mod game {
 }
 
 pub mod ribbon {
-  pub use super::*;
+  use super::*;
 
   event!(client.ribbon.receive => Receive {
     command: String,

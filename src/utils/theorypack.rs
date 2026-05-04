@@ -1,4 +1,3 @@
-use crate::error::Result;
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

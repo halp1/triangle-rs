@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
   types::user::{Me, User},
-  utils::api::core::{Request, Transport, get, post},
+  utils::api::core::{ApiError, Request, Transport, get, post},
 };
 
 use super::core::RequestSet;
@@ -12,6 +12,16 @@ pub struct Users {
   token: String,
   user_agent: String,
   transport: Transport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MeResponse {
+  pub user: Me,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserResponse {
+  pub user: User,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -41,7 +51,7 @@ impl Users {
     }
   }
 
-  pub async fn exists(&self, username: &str) -> crate::Result<bool> {
+  pub async fn exists(&self, username: &str) -> Result<bool, ApiError> {
     Ok(
       get::<ExistsReponse>(Request {
         token: self.token.clone(),
@@ -54,7 +64,7 @@ impl Users {
     )
   }
 
-  pub async fn resolve(&self, username: &str) -> crate::Result<String> {
+  pub async fn resolve(&self, username: &str) -> Result<String, ApiError> {
     Ok(
       get::<ResolveResponse>(Request {
         token: self.token.clone(),
@@ -71,7 +81,7 @@ impl Users {
     &self,
     username: &str,
     password: &str,
-  ) -> crate::Result<AuthenticateResponse> {
+  ) -> Result<AuthenticateResponse, ApiError> {
     post(
       Request {
         token: self.token.clone(),
@@ -88,31 +98,37 @@ impl Users {
     .await
   }
 
-  pub async fn me(&self) -> crate::Result<Me> {
-    get(Request {
-      token: self.token.clone(),
-      user_agent: self.user_agent.clone(),
-      transport: self.transport,
-      uri: "users/me".to_string(),
-    })
-    .await
+  pub async fn me(&self) -> Result<Me, ApiError> {
+    Ok(
+      get::<MeResponse>(Request {
+        token: self.token.clone(),
+        user_agent: self.user_agent.clone(),
+        transport: self.transport,
+        uri: "users/me".to_string(),
+      })
+      .await?
+      .user,
+    )
   }
 
-  pub async fn get(&self, id: &str) -> crate::Result<User> {
-    get(Request {
-      token: self.token.clone(),
-      user_agent: self.user_agent.clone(),
-      transport: self.transport,
-      uri: format!("users/{id}"),
-    })
-    .await
+  pub async fn get(&self, id: &str) -> Result<User, ApiError> {
+    Ok(
+      get::<UserResponse>(Request {
+        token: self.token.clone(),
+        user_agent: self.user_agent.clone(),
+        transport: self.transport,
+        uri: format!("users/{id}"),
+      })
+      .await?
+      .user,
+    )
   }
 }
 
 impl RequestSet for Users {
-  fn set_params(&mut self, token: String, user_agent: String, _transport: Transport) {
+  fn set_params(&mut self, token: String, user_agent: String, transport: Transport) {
     self.token = token;
     self.user_agent = user_agent;
-    self.transport = self.transport;
+    self.transport = transport;
   }
 }

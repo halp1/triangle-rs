@@ -31,6 +31,8 @@ chrono = { version = "0.4", features = ["serde"] }
 url = "2"
 urlencoding = "2"
 bitflags = "2.11.0"
+colored = "2"
+dotenvy = "0.15"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

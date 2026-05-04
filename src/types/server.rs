@@ -52,23 +52,23 @@ pub mod signature {
   #[derive(Clone, Debug, Serialize, Deserialize)]
   #[serde(rename_all = "snake_case")]
   pub struct CatalogSupporter {
-    pub price: u64,
-    pub price_bulk: u64,
-    pub price_gift: u64,
-    pub price_gift_bulk: u64,
+    pub price: f64,
+    pub price_bulk: f64,
+    pub price_gift: f64,
+    pub price_gift_bulk: f64,
     pub bulk_after: u64,
-    pub normal_price: u64,
-    pub normal_price_bulk: u64,
-    pub normal_price_gift: u64,
-    pub normal_price_gift_bulk: u64,
+    pub normal_price: f64,
+    pub normal_price_bulk: f64,
+    pub normal_price_gift: f64,
+    pub normal_price_gift_bulk: f64,
     pub normal_bulk_after: u64,
   }
 
   #[derive(Clone, Debug, Serialize, Deserialize)]
   #[serde(rename_all = "snake_case")]
   pub struct CatalogZenithTowerOst {
-    pub price: u64,
-    pub normal_price: u64,
+    pub price: f64,
+    pub normal_price: f64,
   }
 
   #[derive(Clone, Debug, Serialize, Deserialize)]

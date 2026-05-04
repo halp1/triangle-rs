@@ -1,3 +1,6 @@
+pub mod hook;
+pub use hook::Hook;
+
 use std::{sync::Arc, time::Duration};
 
 use futures_util::{
@@ -11,21 +14,25 @@ use tokio_tungstenite::{
 };
 
 use crate::{
-  types::{events, game::Handling, server, user::Me},
+  types::{
+    events::{recv, send},
+    game::Handling,
+    server,
+    user::Me,
+  },
   utils::{
     EventEmitter,
-    api::{self, Api},
-    events::Event,
+    api::{self, Api, core::ApiError},
+    events::{AsyncCallback, Event},
   },
 };
 use bitflags::bitflags;
+use colored::Colorize;
 use tokio::{
   net::TcpStream,
-  sync::Mutex,
+  sync::{Mutex, broadcast},
   time::{Instant, sleep},
 };
-
-use crate::Result;
 
 #[derive(Clone, Debug)]
 pub struct Spool {
@@ -97,11 +104,9 @@ pub enum OutMsg {
   Disconnect,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Pinger {
   pub heartbeat: u64,
-  pub handle: Option<tokio::task::JoinHandle<()>>,
-  // something to stop it
   pub last: Instant,
   pub time: Duration,
 }
@@ -211,7 +216,7 @@ pub struct Ribbon {
   config: Arc<Mutex<RibbonConfig>>,
   state: Arc<Mutex<RibbonState>>,
   reconnect_state: Arc<Mutex<RibbonReconnectState>>,
-  api: Arc<Api>,
+  pub api: Arc<Api>,
   pub emitter: Arc<Mutex<EventEmitter>>,
 }
 
@@ -227,26 +232,19 @@ pub struct Params {
 #[derive(Debug, Clone, Default)]
 pub struct OptionalParams {
   pub options: Option<Options>,
-  pub token: Option<String>,
   pub handling: Option<Handling>,
   pub user_agent: Option<String>,
   pub transport: Option<Transport>,
 }
 
-impl From<OptionalParams> for Params {
-  fn from(opt: OptionalParams) -> Self {
-    Self {
-      options: opt.options.unwrap_or_default(),
-      token: opt.token.unwrap_or_default(),
-      handling: opt.handling.unwrap_or_default(),
-      user_agent: opt.user_agent.unwrap_or_default(),
-      transport: opt.transport.unwrap_or_default(),
-    }
-  }
+pub enum WrapError {
+  ServerError,
+  ParseError,
+  Error(String, serde_json::Value),
 }
 
 impl Ribbon {
-  pub async fn new(params: Params) -> Result<Self> {
+  pub async fn new(params: Params) -> Result<Self, ApiError> {
     let api = Api::new(api::Config {
       token: params.token.clone(),
       user_agent: params.user_agent.clone(),
@@ -259,7 +257,7 @@ impl Ribbon {
 
     let me = api.users.me().await?;
 
-    Ok(Self {
+    let ribbon = Self {
       write: Arc::new(Mutex::new(None)),
       config: Arc::new(Mutex::new(RibbonConfig {
         token: params.token,
@@ -278,7 +276,6 @@ impl Ribbon {
         me,
         pinger: Pinger {
           heartbeat: 0,
-          handle: None,
           last: Instant::now(),
           time: Duration::from_secs(0),
         },
@@ -301,10 +298,17 @@ impl Ribbon {
       })),
       api: Arc::new(api),
       emitter: Arc::new(Mutex::new(EventEmitter::new())),
-    })
+    };
+
+    let ribbon_clone = ribbon.clone();
+    tokio::spawn(Box::pin(async move {
+      Ribbon::pinger(ribbon_clone).await;
+    }));
+
+    Ok(ribbon)
   }
 
-  pub async fn log(&self, msg: &str, level: LogLevel, force: bool) {
+  async fn log(&self, msg: &str, level: LogLevel, force: bool) {
     if level == LogLevel::Error {
       self.emitter.lock().await.emit_raw(
         "client.ribbon.error",
@@ -328,10 +332,14 @@ impl Ribbon {
       return;
     }
 
+    let prefix = match level {
+      LogLevel::Info => "[triangle-rs]".blue().to_string(),
+      LogLevel::Warning => "[triangle-rs]".yellow().to_string(),
+      LogLevel::Error => "[triangle-rs]".red().to_string(),
+    };
     match level {
-      LogLevel::Info => println!("[Triangle.rs] {}", msg),
-      LogLevel::Warning => eprintln!("[Triangle.rs] {}", msg),
-      LogLevel::Error => eprintln!("[Triangle.rs] {}", msg),
+      LogLevel::Info => println!("{} {}", prefix, msg),
+      LogLevel::Warning | LogLevel::Error => eprintln!("{} {}", prefix, msg),
     }
   }
 
@@ -344,15 +352,17 @@ impl Ribbon {
 
     let end = Instant::now();
     if end.duration_since(start) > SLOW_CODEC_THRESHOLD {
-      self.log(
-        &format!(
-          "Slow encode: {} ({}ms)",
-          msg,
-          end.duration_since(start).as_millis()
-        ),
-        LogLevel::Warning,
-        true,
-      );
+      self
+        .log(
+          &format!(
+            "Slow encode: {} ({}ms)",
+            msg,
+            end.duration_since(start).as_millis()
+          ),
+          LogLevel::Warning,
+          true,
+        )
+        .await;
     }
     res
   }
@@ -366,15 +376,17 @@ impl Ribbon {
 
     let end = Instant::now();
     if end.duration_since(start) > SLOW_CODEC_THRESHOLD {
-      self.log(
-        &format!(
-          "Slow decode: {} ({}ms)",
-          res["command"].as_str().unwrap_or("unknown"),
-          end.duration_since(start).as_millis()
-        ),
-        LogLevel::Warning,
-        true,
-      );
+      self
+        .log(
+          &format!(
+            "Slow decode: {} ({}ms)",
+            res["command"].as_str().unwrap_or("unknown"),
+            end.duration_since(start).as_millis()
+          ),
+          LogLevel::Warning,
+          true,
+        )
+        .await;
     }
     res
   }
@@ -390,27 +402,33 @@ impl Ribbon {
     }));
   }
 
-  async fn connect(&mut self) -> Result<()> {
+  async fn connect(&mut self) -> Result<(), ApiError> {
     let options = self.config.lock().await.options.clone();
-
-    let mut state = self.state.lock().await;
 
     let spool = self.api.server.spool(options.spooling).await?;
 
-    state.spool = Spool {
-      host: spool.host,
-      endpoint: spool.endpoint,
-      token: spool.token,
-      signature: state.spool.signature.clone(),
+    let (uri, token, had_successful, host, endpoint) = {
+      let mut state = self.state.lock().await;
+      state.spool = Spool {
+        host: spool.host.clone(),
+        endpoint: spool.endpoint.clone(),
+        token: spool.token.clone(),
+        signature: state.spool.signature.clone(),
+      };
+      let had_successful = state.flags.contains(Flags::SUCCESSFUL);
+      state.flags |= Flags::CONNECTING;
+      (
+        self.uri(state.spool.clone()),
+        state.spool.token.clone(),
+        had_successful,
+        spool.host.clone(),
+        spool.endpoint.clone(),
+      )
     };
 
     self
       .log(
-        format!(
-          "Connecting to <{}/{}>",
-          state.spool.host, state.spool.endpoint
-        )
-        .as_str(),
+        &format!("Connecting to <{}/{}>", host, endpoint),
         LogLevel::Info,
         false,
       )
@@ -419,29 +437,34 @@ impl Ribbon {
     if let Some(mut write) = self.write.lock().await.take() {
       write.close().await.ok();
     }
-    state.flags |= Flags::CONNECTING;
 
-    let mut request = self
-      .uri(state.spool.clone())
-      .into_client_request()
-      .expect("Invalid WebSocket URL");
-    let protocol_header = HeaderValue::from_str(state.spool.token.as_str())
-      .expect("Invalid characters in token/protocol");
+    let mut request = uri.into_client_request().expect("Invalid WebSocket URL");
+    let protocol_header =
+      HeaderValue::from_str(token.as_str()).expect("Invalid characters in token/protocol");
 
     request
       .headers_mut()
       .insert(SEC_WEBSOCKET_PROTOCOL, protocol_header);
 
-    // TODO: handle error for reconnect
     let (stream, _) = match connect_async(request).await {
       Ok(stream) => stream,
       Err(error) => {
-        if !state.flags.contains(Flags::SUCCESSFUL) {
+        if !had_successful {
           self
             .log(
               &format!("Connection error: {}", error),
               LogLevel::Error,
-              true,
+              false,
+            )
+            .await;
+
+          return Err(ApiError::Server(format!("Failed to connect: {}", error)));
+        } else {
+          self
+            .log(
+              &format!("Connection error (will attempt to reconnect): {}", error),
+              LogLevel::Warning,
+              false,
             )
             .await;
         }
@@ -463,12 +486,13 @@ impl Ribbon {
 
     let (write, read) = stream.split();
 
-    state.flags |= Flags::ALIVE | Flags::SUCCESSFUL;
-    state.flags &= !Flags::TIMING_OUT;
+    {
+      let mut state = self.state.lock().await;
+      state.flags |= Flags::ALIVE | Flags::SUCCESSFUL;
+      state.flags &= !Flags::TIMING_OUT;
+    }
 
-    self.write = Arc::new(Mutex::new(Some(write)));
-
-    drop(state);
+    self.write.lock().await.replace(write);
 
     let session = self.state.lock().await.session.clone();
 
@@ -519,7 +543,8 @@ impl Ribbon {
     match packet {
       TransportData::UTF8(s) => {
         if let Some(write) = &mut *self.write.lock().await {
-          let _ = write.send(Message::Text(s.into()));
+          let msg = Message::Text(s.into());
+          let _ = write.send(msg).await;
         }
       }
 
@@ -550,34 +575,39 @@ impl Ribbon {
     }
   }
 
-  async fn process_message(&mut self, msg: serde_json::Value) {
-    let command = msg["command"].as_str().unwrap_or("");
-    let data = &msg["data"];
-    let id = msg["id"].as_u64().map(|v| v as u32);
+  fn process_message(
+    &mut self,
+    msg: serde_json::Value,
+  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    Box::pin(async move {
+      let command = msg["command"].as_str().unwrap_or("");
+      let data = &msg["data"];
+      let id = msg["id"].as_u64().map(|v| v as u32);
 
-    if let Some(id) = id {
-      let received_id = self.state.lock().await.received_id;
-      if id > received_id {
-        let packet = InPacket {
-          id: Some(id),
-          command: command.to_string(),
-          data: data.clone(),
-        };
-        if id == received_id + 1 {
-          self.run_message(packet).await;
-        } else {
-          self.state.lock().await.recv_queue.push(packet);
+      if let Some(id) = id {
+        let received_id = self.state.lock().await.received_id;
+        if id > received_id {
+          let packet = InPacket {
+            id: Some(id),
+            command: command.to_string(),
+            data: data.clone(),
+          };
+          if id == received_id + 1 {
+            self.run_message(packet).await;
+          } else {
+            self.state.lock().await.recv_queue.push(packet);
+          }
         }
+      } else {
+        self
+          .run_message(InPacket {
+            id: None,
+            command: command.to_string(),
+            data: data.clone(),
+          })
+          .await;
       }
-    } else {
-      self
-        .run_message(InPacket {
-          id: None,
-          command: command.to_string(),
-          data: data.clone(),
-        })
-        .await;
-    }
+    })
   }
 
   async fn process_queue(&mut self) {
@@ -597,12 +627,13 @@ impl Ribbon {
     while let Some(packet) = state.recv_queue.first() {
       if let Some(id) = packet.id {
         if id <= state.received_id {
+          state.recv_queue.remove(0);
           continue;
         } else if id != state.received_id + 1 {
           break;
         } else {
-          packets.push(packet.clone());
           state.received_id = id;
+          packets.push(state.recv_queue.remove(0));
         }
       } else {
         state.recv_queue.remove(0);
@@ -617,6 +648,10 @@ impl Ribbon {
   }
 
   async fn run_message(&mut self, packet: InPacket) {
+    if let Some(id) = packet.id {
+      self.state.lock().await.received_id = id;
+    }
+
     if packet.command != "ping" && packet.command != "packets" {
       self.emitter.lock().await.emit_raw(
         "client.ribbon.receive",
@@ -688,6 +723,17 @@ impl Ribbon {
         state.session.token_id = tokenid;
       }
 
+      "packets" => {
+        for packet in packet.data["packets"].as_array().unwrap_or(&vec![]) {
+          let transport = self.config.lock().await.transport.clone();
+          match transport {
+            Transport::JSON => {
+              self.clone().process_message(packet.clone()).await;
+            }
+          }
+        }
+      }
+
       "ping" => {
         let id = packet.data["recvid"].as_u64().map(|v| v as u32);
         let mut state = self.state.lock().await;
@@ -715,7 +761,7 @@ impl Ribbon {
           .log(&format!("kicked: {}", reason), LogLevel::Error, true)
           .await;
 
-        self.close("");
+        self.close("").await;
       }
 
       "nope" => {
@@ -734,11 +780,11 @@ impl Ribbon {
           )
           .await;
 
-        self.close("");
+        self.close("").await;
       }
 
       "server.authorize" => {
-        let data = serde_json::from_value::<events::recv::server::Authorize>(packet.data.clone());
+        let data = serde_json::from_value::<recv::server::Authorize>(packet.data.clone());
 
         match data {
           Ok(data) => {
@@ -747,14 +793,14 @@ impl Ribbon {
               self.log("Authorized", LogLevel::Info, false).await;
 
               self
-                .emit(events::send::social::Presence {
+                .emit(send::social::Presence {
                   status: crate::types::social::Status::Online,
                   detail: crate::types::social::Detail::Menus,
                 })
                 .await;
 
               self
-                .emit(events::send::client::Ready {
+                .emit(send::client::Ready {
                   endpoint: self.uri(spool),
                   social: data.social,
                 })
@@ -838,7 +884,7 @@ impl Ribbon {
 
       let flags = self.state.lock().await.flags;
 
-      if flags.contains(Flags::DEAD) {
+      if !flags.contains(Flags::DEAD) {
         let mut ribbon = self.clone();
         let handle = tokio::spawn(Box::pin(async move {
           ribbon.connect().await.ok();
@@ -909,24 +955,26 @@ impl Ribbon {
       state.last_disconnect_reason = reason.to_string();
     }
 
-    self.emitter.lock().await.emit(events::send::client::Close {
+    self.emitter.lock().await.emit(send::client::Close {
       reason: state.last_disconnect_reason.clone(),
     });
 
     drop(state);
 
-    if self.write.lock().await.is_some() {
-      self.emit(events::send::Die {}).await;
-      self.write.lock().await.take().map(|mut write| async move {
-        write.close().await.ok();
-      });
+    let write_exists = self.write.lock().await.is_some();
+
+    if write_exists {
+      self.emit(send::Die {}).await;
+    }
+
+    if let Some(mut write) = self.write.lock().await.take() {
+      write.close().await.ok();
     }
 
     let mut state = self.state.lock().await;
 
     state.flags |= Flags::DEAD;
 
-    state.pinger.handle.take().map(|h| h.abort());
     self
       .reconnect_state
       .lock()
@@ -940,11 +988,22 @@ impl Ribbon {
     mut stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     mut ribbon: Ribbon,
   ) {
+    ribbon
+      .log("Listening for messages...", LogLevel::Info, false)
+      .await;
     while let Some(message) = stream.next().await {
       match message {
         Ok(msg) => {
           match msg {
             Message::Close(frame) => {
+              ribbon
+                .log(
+                  "Close frame received, closing connection",
+                  LogLevel::Warning,
+                  false,
+                )
+                .await;
+
               let code = frame.as_ref().map(|f| f.code.into()).unwrap_or(0);
               let reason = close_code_reason(code);
               ribbon.state.lock().await.last_disconnect_reason = reason.into();
@@ -958,17 +1017,41 @@ impl Ribbon {
           let decoded = ribbon.config.lock().await.transport.decode(match msg {
             Message::Text(ref s) => s.as_bytes(),
             Message::Binary(ref b) => b,
-            _ => continue, // ignore other message types
+            _ => {
+              ribbon
+                .log(
+                  &format!("Unsupported message: {:?}", msg),
+                  LogLevel::Warning,
+                  false,
+                )
+                .await;
+              continue;
+            } // ignore other message types
           });
+
+          {
+            let mut state = ribbon.state.lock().await;
+            state.flags |= Flags::ALIVE;
+            state.flags &= !Flags::TIMING_OUT;
+          }
 
           ribbon.process_message(decoded).await;
           ribbon.process_queue().await;
         }
         Err(e) => {
           match e {
-            Error::ConnectionClosed => {}
+            Error::ConnectionClosed => {
+              ribbon
+                .log("Connection closed by server", LogLevel::Warning, true)
+                .await;
+              // ribbon.state.lock().await.flags |= Flags::CONNECTING;
+              // ribbon.reconnect().await;
+              return;
+            }
 
-            _ => {}
+            _ => {
+              ribbon.log(&format!("{}", e), LogLevel::Error, true).await;
+            }
           }
           // handle error
         }
@@ -976,20 +1059,121 @@ impl Ribbon {
     }
   }
 
-  pub async fn wait<T: Event>(&mut self) -> Option<T> {
+  async fn pinger(mut ribbon: Ribbon) {
+    loop {
+      tokio::time::sleep(Duration::from_millis(2500)).await;
+
+      if ribbon.state.lock().await.flags.contains(Flags::DEAD) {
+        return;
+      }
+
+      let mut state = ribbon.state.lock().await;
+      state.pinger.heartbeat += 1;
+
+      let should_ping =
+        if state.flags.contains(Flags::FAST_PING) && !state.flags.contains(Flags::TIMING_OUT) {
+          true
+        } else {
+          state.pinger.heartbeat % 2 == 0
+        };
+
+      if should_ping {
+        if !state.flags.contains(Flags::ALIVE) {
+          state.flags |= Flags::TIMING_OUT | Flags::ALIVE | Flags::CONNECTING;
+          drop(state);
+          ribbon
+            .log(
+              "Connection timed out, reconnecting...",
+              LogLevel::Warning,
+              false,
+            )
+            .await;
+          ribbon.reconnect().await;
+        } else {
+          state.flags &= !Flags::ALIVE;
+          let write_open = ribbon.write.lock().await.is_some();
+          ribbon
+            .log(
+              &format!("Sending ping (open: {})", write_open),
+              LogLevel::Info,
+              false,
+            )
+            .await;
+          if write_open {
+            state.pinger.last = Instant::now();
+            drop(state);
+            ribbon
+              .pipe(
+                "ping",
+                serde_json::json!({
+                  "recvid": ribbon.state.lock().await.received_id,
+                }),
+              )
+              .await;
+          }
+        }
+      }
+    }
+  }
+
+  pub async fn wait<T: Event>(&self) -> Option<T> {
     let emitter = self.emitter.lock().await.clone();
     emitter.once::<T>().await
   }
 
-  pub async fn on<T: Event>(&mut self, callback: impl Fn(T) + Send + Sync + 'static) {
-    let emitter = self.emitter.lock().await;
-    emitter.on(callback).await;
+  pub async fn on<T: Event>(
+    &self,
+    callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
+  ) -> tokio::task::JoinHandle<()> {
+    let emitter = self.emitter.clone();
+    emitter.lock().await.on(callback)
   }
 
-  pub async fn once<T: Event>(&mut self, callback: impl Fn(T) + Send + Sync + 'static) {
+  pub async fn once<T: Event>(
+    &self,
+    callback: impl Fn(T) + Send + Sync + 'static,
+  ) -> tokio::task::JoinHandle<()> {
     let emitter = self.emitter.lock().await.clone();
     tokio::spawn(Box::pin(async move {
       emitter.once::<T>().await.map(callback);
-    }));
+    }))
+  }
+
+  pub fn hook(&self) -> Hook {
+    Hook::new(self.clone())
+  }
+
+  pub async fn wrap<T: Event>(&mut self, event: impl Event) -> std::result::Result<T, WrapError> {
+    self.wrap_with_error::<T>(event, &["client.error"]).await
+  }
+
+  pub async fn wrap_with_error<T: Event>(
+    &mut self,
+    event: impl Event,
+    error_events: &[&str],
+  ) -> std::result::Result<T, WrapError> {
+    self.emit(event).await;
+
+    let emitter: EventEmitter = self.emitter.lock().await.clone();
+
+    let mut rx = emitter.subscribe();
+
+    loop {
+      match rx.recv().await {
+        Ok((cmd, data)) if error_events.contains(&cmd.as_str()) => {
+          return Err(WrapError::Error(cmd, data));
+        }
+        Ok((cmd, data)) if cmd == T::NAME => {
+          if let Ok(parsed) = serde_json::from_value::<T>(data) {
+            return Ok(parsed);
+          } else {
+            return Err(WrapError::ParseError);
+          }
+        }
+        Ok(_) => {}
+        Err(broadcast::error::RecvError::Closed) => return Err(WrapError::ServerError),
+        Err(broadcast::error::RecvError::Lagged(_)) => {}
+      }
+    }
   }
 }
