@@ -79,7 +79,7 @@ pub enum Passthrough {
   Full,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SpinBonuses {
   #[serde(rename = "T-spins")]
   TSpins,
@@ -103,6 +103,40 @@ pub enum SpinBonuses {
   None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum Spin {
+	#[serde(rename = "none")]
+	None,
+	#[serde(rename = "mini")]
+	Mini,
+	#[serde(rename = "normal")]
+	Normal,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+pub enum Preset {
+  #[serde(rename = "default")]
+  Default,
+  #[serde(rename = "tetra league")]
+  TetraLeague,
+  #[serde(rename = "tetra league (season 1)")]
+  TetraLeagueSeason1,
+  #[serde(rename = "enforced delays")]
+  EnforcedDelays,
+  #[serde(rename = "4wide")]
+  FourWide,
+  #[serde(rename = "100 battle royale")]
+  HundredBattleRoyale,
+  #[serde(rename = "classic")]
+  Classic,
+  #[serde(rename = "arcade")]
+  Arcade,
+  #[serde(rename = "bombs")]
+  Bombs,
+  #[serde(rename = "quickplay")]
+  Quickplay,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RoundingMode {
@@ -120,6 +154,17 @@ pub enum ComboTable {
   ClassicGuideline,
   #[serde(rename = "modern guideline")]
   ModernGuideline,
+}
+
+impl ComboTable {
+	pub fn data(&self) -> Vec<f64> {
+		match self {
+			ComboTable::None => vec![0.0],
+			ComboTable::Multiplier => panic!("Multiplier combo table does not have predefined data"),
+			ComboTable::ClassicGuideline => vec![0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+			ComboTable::ModernGuideline => vec![0.0, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
+		}
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -149,6 +194,14 @@ pub enum GameOverReason {
   Disconnect,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Buffering {
+	Off,
+	Hold,
+	Tap
+}
+
 /// Handling settings sent within `server.authorize`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Handling {
@@ -159,11 +212,11 @@ pub struct Handling {
   pub safelock: bool,
   pub cancel: bool,
   pub may20g: bool,
-  /// `"off"` | `"hold"` | `"tap"`
-  pub irs: String,
-  /// `"off"` | `"hold"` | `"tap"`
-  pub ihs: String,
+  pub irs: Buffering,
+  pub ihs: Buffering,
 }
+
+
 
 impl Default for Handling {
   fn default() -> Self {
@@ -175,8 +228,8 @@ impl Default for Handling {
       safelock: false,
       cancel: false,
       may20g: false,
-      irs: "off".to_string(),
-      ihs: "off".to_string(),
+      irs: Buffering::Tap,
+      ihs: Buffering::Tap,
     }
   }
 }
@@ -308,10 +361,10 @@ pub struct MatchData {
   pub gamemode: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpectatingStrategy {
   Instant,
-  Delayed,
+  Smooth,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -396,7 +449,7 @@ pub mod ige {
       pub amt: u64,
       pub x: f64,
       pub y: f64,
-      pub size: f64,
+      pub size: u64,
 
       #[serde(default)]
       pub zthalt: Option<serde_json::Value>,
@@ -457,25 +510,25 @@ pub mod ige {
 
   #[derive(Debug, Clone, Serialize, Deserialize)]
   pub struct IGE {
-    id: u64,
-    frame: u64,
+    pub id: u64,
+    pub frame: u64,
     #[serde(flatten)]
-    data: IGEData,
+    pub data: IGEData,
   }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Killer {
-  gameid: u64,
-  r#type: String,
-  username: Option<String>,
+  pub gameid: u64,
+  pub r#type: String,
+  pubusername: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayEndData {
   #[serde(rename = "gameoverreason")]
-  game_over_reason: GameOverReason,
-  killer: Killer,
+  pub game_over_reason: GameOverReason,
+  pub killer: Killer,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -486,11 +539,18 @@ pub enum TargetingStrategy {
   Eliminations = 1,
   Random = 2,
   Payback = 3,
+  Manual(u64),
 }
 
 impl From<TargetingStrategy> for u8 {
   fn from(m: TargetingStrategy) -> Self {
-    m as u8
+    match m {
+      TargetingStrategy::Manual(_) => panic!("Manual targeting strategy cannot be converted to u8"),
+      TargetingStrategy::Even => 0,
+      TargetingStrategy::Eliminations => 1,
+      TargetingStrategy::Random => 2,
+      TargetingStrategy::Payback => 3,
+    }
   }
 }
 
@@ -503,6 +563,7 @@ impl TryFrom<u8> for TargetingStrategy {
       1 => Ok(TargetingStrategy::Eliminations),
       2 => Ok(TargetingStrategy::Random),
       3 => Ok(TargetingStrategy::Payback),
+      4 => Err("Manual targeting strategy cannot be created from u8".to_string()),
       _ => Err(format!("invalid TargetingStrategy: {}", value)),
     }
   }
@@ -562,10 +623,10 @@ pub mod replay {
 
   #[derive(Debug, Clone, Serialize, Deserialize)]
   pub struct Keypress {
-    key: Key,
-    subframe: f64,
+    pub key: Key,
+    pub subframe: f64,
     #[serde(default)]
-    hoisted: bool,
+    pub hoisted: bool,
   }
 
   #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -579,7 +640,7 @@ pub mod replay {
     #[serde(rename = "full")]
     Full(Full),
     #[serde(rename = "ige")]
-    IGEFrame(ige::IGE),
+    IGE(ige::IGE),
     #[serde(rename = "keydown")]
     KeyDown(Keypress),
     #[serde(rename = "keyup")]
@@ -609,3 +670,84 @@ pub struct ReadyPlayer {
   pub naturalorder: u32,
 }
 
+pub mod tick {
+  use std::sync::Arc;
+
+  use futures_util::future::BoxFuture;
+  use serde::{Deserialize, Serialize};
+  use tokio::sync::Mutex;
+
+  use crate::Engine;
+
+  #[derive(Debug, Clone, Eq, PartialEq)]
+  pub enum KeypressType {
+    Keydown,
+    Keyup,
+  }
+
+  #[derive(Debug, Clone)]
+  pub struct KeypressData {
+    pub key: super::Key,
+    pub subframe: f64,
+    pub hoisted: bool,
+  }
+
+  #[derive(Debug, Clone)]
+  pub struct Keypress {
+    pub r#type: KeypressType,
+    pub frame: u64,
+    pub data: KeypressData,
+  }
+
+  #[derive(Debug, Clone)]
+  pub struct In {
+    pub gameid: u64,
+    pub engine: Engine,
+  }
+
+  pub trait RunAfter: Send {
+    fn call(self: Box<Self>) -> BoxFuture<'static, ()>;
+  }
+
+  impl<F, Fut> RunAfter for F
+  where
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = ()> + Send + 'static,
+  {
+    fn call(self: Box<Self>) -> BoxFuture<'static, ()> {
+      Box::pin((*self)())
+    }
+  }
+
+  pub struct Out {
+    pub keys: Vec<Keypress>,
+    pub run_after: Vec<Box<dyn RunAfter + Send>>,
+  }
+
+  #[derive(Clone)]
+  pub struct Ticker(pub Arc<Mutex<Box<dyn Fn(In) -> BoxFuture<'static, Out> + Send + Sync>>>);
+
+  impl<'de> Deserialize<'de> for Ticker {
+    fn deserialize<D>(_: D) -> Result<Self, D::Error>
+    where
+      D: serde::Deserializer<'de>,
+    {
+      unimplemented!("Ticker can not be deserialized")
+    }
+  }
+
+  impl Serialize for Ticker {
+    fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
+    where
+      S: serde::Serializer,
+    {
+      unimplemented!("Ticker can not be serialized")
+    }
+  }
+
+  impl std::fmt::Debug for Ticker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      f.debug_tuple("Ticker").finish()
+    }
+  }
+}

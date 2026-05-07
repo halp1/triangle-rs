@@ -45,8 +45,14 @@ pub mod game {
   }
 
   pub mod round {
+    use crate::{Engine, types::game::tick};
+
     use super::*;
-    // TODO: client.game.round.start
+
+    event!(client.game.round.start => Start {
+      ticker: tick::Ticker,
+      engine: Engine,
+    });
     event!(client.game.round.end => End(Option<String>));
   }
 

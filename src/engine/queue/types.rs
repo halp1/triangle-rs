@@ -24,13 +24,6 @@ pub enum Mino {
 }
 
 impl Mino {
-  pub fn is_standard(&self) -> bool {
-    matches!(
-      self,
-      Mino::I | Mino::J | Mino::L | Mino::O | Mino::S | Mino::T | Mino::Z
-    )
-  }
-
   pub fn as_str(&self) -> &'static str {
     match self {
       Mino::I => "i",

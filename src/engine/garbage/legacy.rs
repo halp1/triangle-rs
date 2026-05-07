@@ -1,27 +1,27 @@
 use super::{
-  GarbageQueue, GarbageQueueInitParams, GarbageQueueSnapshot, IncomingGarbage, OutgoingGarbage,
+ GarbageQueueInitParams, GarbageQueueSnapshot, IncomingGarbage, OutgoingGarbage,
   RoundingMode,
 };
 use crate::engine::utils::rng::Rng;
 
-fn column_width(board_width: usize, hole_size: usize) -> i32 {
-  (board_width as i32 - (hole_size as i32 - 1)).max(0)
+fn column_width(board_width: u64, hole_size: u64) -> u64 {
+  (board_width - (hole_size - 1)).max(0)
 }
 
 #[derive(Debug, Clone)]
 pub struct LegacyGarbageQueue {
   pub options: GarbageQueueInitParams,
   pub queue: Vec<IncomingGarbage>,
-  pub last_tank_time: i32,
-  pub last_column: Option<i32>,
+  pub last_tank_time: u64,
+  pub last_column: Option<u64>,
   pub rng: Rng,
-  pub sent: i32,
+  pub sent: u64,
 }
 
 impl LegacyGarbageQueue {
   pub fn new(mut options: GarbageQueueInitParams) -> Self {
     if options.cap.absolute == 0 {
-      options.cap.absolute = i32::MAX;
+      options.cap.absolute = u64::MAX;
     }
     let rng = Rng::new(options.seed);
     LegacyGarbageQueue {
@@ -38,41 +38,41 @@ impl LegacyGarbageQueue {
     self.rng.next_float()
   }
 
-  fn internal_reroll_column(&self, current: Option<i32>, rng: &mut Rng) -> i32 {
+  fn internal_reroll_column(&self, current: Option<u64>, rng: &mut Rng) -> u64 {
     let cols = column_width(self.options.board_width, self.options.garbage.hole_size);
     if self.options.messiness.nosame && current.is_some() {
       let lc = current.unwrap();
-      let mut col = (rng.next_float() * (cols - 1) as f64) as i32;
+      let mut col = (rng.next_float() * (cols - 1) as f64) as u64;
       if col >= lc {
         col += 1;
       }
       col
     } else {
-      (rng.next_float() * cols as f64) as i32
+      (rng.next_float() * cols as f64) as u64
     }
   }
 
-  fn reroll_column(&mut self) -> i32 {
+  fn reroll_column(&mut self) -> u64 {
     let lc = self.last_column;
     let col = {
       let rng = &mut self.rng;
       let cols = column_width(self.options.board_width, self.options.garbage.hole_size);
       if self.options.messiness.nosame && lc.is_some() {
         let c = lc.unwrap();
-        let mut v = (rng.next_float() * (cols - 1) as f64) as i32;
+        let mut v = (rng.next_float() * (cols - 1) as f64) as u64;
         if v >= c {
           v += 1;
         }
         v
       } else {
-        (rng.next_float() * cols as f64) as i32
+        (rng.next_float() * cols as f64) as u64
       }
     };
     self.last_column = Some(col);
     col
   }
 
-  pub fn size(&self) -> i32 {
+  pub fn size(&self) -> u64 {
     self.queue.iter().map(|g| g.amount).sum()
   }
 
@@ -84,7 +84,7 @@ impl LegacyGarbageQueue {
     }
 
     let cap = self.options.cap.absolute;
-    let mut total: i32 = self.queue.iter().map(|g| g.amount).sum();
+    let mut total: u64 = self.queue.iter().map(|g| g.amount).sum();
 
     while total > cap && !self.queue.is_empty() {
       let excess = total - cap;
@@ -99,7 +99,7 @@ impl LegacyGarbageQueue {
     }
   }
 
-  pub fn confirm(&mut self, cid: i32, gameid: i32, frame: i32) -> bool {
+  pub fn confirm(&mut self, cid: u64, gameid: u64, frame: u64) -> bool {
     if let Some(g) = self
       .queue
       .iter_mut()
@@ -115,15 +115,15 @@ impl LegacyGarbageQueue {
 
   pub fn cancel(
     &mut self,
-    amount: i32,
-    piece_count: i32,
+    amount: u64,
+    piece_count: u64,
     legacy_opener: bool,
-  ) -> (i32, Vec<IncomingGarbage>) {
+  ) -> (u64, Vec<IncomingGarbage>) {
     let mut send = amount;
-    let mut cancel = 0i32;
+    let mut cancel = 0u64;
 
     let opener_phase = self.options.opener_phase;
-    let current_size: i32 = self.queue.iter().map(|g| g.amount).sum();
+    let current_size: u64 = self.queue.iter().map(|g| g.amount).sum();
     if piece_count + 1 <= opener_phase - (if legacy_opener { 1 } else { 0 })
       && current_size >= self.sent
     {
@@ -164,10 +164,10 @@ impl LegacyGarbageQueue {
   fn internal_tank(
     options: &GarbageQueueInitParams,
     queue: &mut Vec<IncomingGarbage>,
-    last_tank_time: &mut i32,
-    last_column: &mut Option<i32>,
+    last_tank_time: &mut u64,
+    last_column: &mut Option<u64>,
     rng: &mut Rng,
-    frame: i32,
+    frame: u64,
     cap: f64,
     hard: bool,
   ) -> Vec<OutgoingGarbage> {
@@ -182,20 +182,20 @@ impl LegacyGarbageQueue {
       let cols = column_width(options.board_width, options.garbage.hole_size);
       let new_col = if options.messiness.nosame && lc.is_some() {
         let c = lc.unwrap();
-        let mut v = (rng.next_float() * (cols - 1) as f64) as i32;
+        let mut v = (rng.next_float() * (cols - 1) as f64) as u64;
         if v >= c {
           v += 1;
         }
         v
       } else {
-        (rng.next_float() * cols as f64) as i32
+        (rng.next_float() * cols as f64) as u64
       };
       *last_column = Some(new_col);
       *last_tank_time = frame;
     }
 
-    let mut total = 0i32;
-    let max = cap.min(options.cap.max as f64).floor() as i32;
+    let mut total = 0u64;
+    let max = cap.min(options.cap.max as f64).floor() as u64;
     let mut res: Vec<OutgoingGarbage> = Vec::new();
 
     while total < max && !queue.is_empty() {
@@ -226,13 +226,13 @@ impl LegacyGarbageQueue {
           let cols = column_width(options.board_width, options.garbage.hole_size);
           let new_col = if options.messiness.nosame && lc.is_some() {
             let c = lc.unwrap();
-            let mut v = (rng.next_float() * (cols - 1) as f64) as i32;
+            let mut v = (rng.next_float() * (cols - 1) as f64) as u64;
             if v >= c {
               v += 1;
             }
             v
           } else {
-            (rng.next_float() * cols as f64) as i32
+            (rng.next_float() * cols as f64) as u64
           };
           *last_column = Some(new_col);
           new_col
@@ -245,7 +245,7 @@ impl LegacyGarbageQueue {
           amount: 1,
           size: item.size,
           id: item.cid,
-          column: col as usize,
+          column: col as u64,
         });
       }
 
@@ -254,13 +254,13 @@ impl LegacyGarbageQueue {
         let cols = column_width(options.board_width, options.garbage.hole_size);
         let new_col = if options.messiness.nosame && lc.is_some() {
           let c = lc.unwrap();
-          let mut v = (rng.next_float() * (cols - 1) as f64) as i32;
+          let mut v = (rng.next_float() * (cols - 1) as f64) as u64;
           if v >= c {
             v += 1;
           }
           v
         } else {
-          (rng.next_float() * cols as f64) as i32
+          (rng.next_float() * cols as f64) as u64
         };
         *last_column = Some(new_col);
       }
@@ -280,13 +280,13 @@ impl LegacyGarbageQueue {
       &mut last_tank_time,
       &mut last_column,
       &mut rng,
-      i32::MIN / 2,
-      i32::MAX as f64,
+      u64::MIN / 2,
+      u64::MAX as f64,
       false,
     )
   }
 
-  pub fn next_column(&self) -> i32 {
+  pub fn next_column(&self) -> u64 {
     if self.last_column.is_none() {
       let mut rng = self.rng.clone();
       self.internal_reroll_column(None, &mut rng)
@@ -295,7 +295,7 @@ impl LegacyGarbageQueue {
     }
   }
 
-  pub fn tank(&mut self, frame: i32, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
+  pub fn tank(&mut self, frame: u64, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
     let res = Self::internal_tank(
       &self.options,
       &mut self.queue,
@@ -309,11 +309,11 @@ impl LegacyGarbageQueue {
     res
   }
 
-  pub fn round(&mut self, amount: f64) -> i32 {
+  pub fn round(&mut self, amount: f64) -> u64 {
     match self.options.rounding {
-      RoundingMode::Down => amount.floor() as i32,
+      RoundingMode::Down => amount.floor() as u64,
       RoundingMode::Rng => {
-        let floored = amount.floor() as i32;
+        let floored = amount.floor() as u64;
         if amount.fract() == 0.0 {
           floored
         } else {

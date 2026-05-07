@@ -3,31 +3,31 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IgeHandlerSnapshot {
-  pub iid: i32,
-  pub players: HashMap<i32, PlayerData>,
+  pub iid: u64,
+  pub players: HashMap<u64, PlayerData>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GarbageRecord {
-  pub iid: i32,
-  pub amount: i32,
+  pub iid: u64,
+  pub amount: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerData {
-  pub incoming: i32,
+  pub incoming: u64,
   pub outgoing: Vec<GarbageRecord>,
 }
 
 #[derive(Debug, Clone)]
 pub struct IgeHandler {
-  pub opponents: Vec<i32>,
-  players: HashMap<i32, PlayerData>,
-  iid_counter: i32,
+  pub opponents: Vec<u64>,
+  players: HashMap<u64, PlayerData>,
+  iid_counter: u64,
 }
 
 impl IgeHandler {
-  pub fn new(opponents: Vec<i32>) -> Self {
+  pub fn new(opponents: Vec<u64>) -> Self {
     let players = opponents
       .iter()
       .map(|&id| {
@@ -47,7 +47,7 @@ impl IgeHandler {
     }
   }
 
-  pub fn send(&mut self, target: i32, amount: i32) -> i32 {
+  pub fn send(&mut self, target: u64, amount: u64) -> u64 {
     if amount == 0 {
       return 0;
     }
@@ -68,7 +68,7 @@ impl IgeHandler {
     iid
   }
 
-  pub fn receive(&mut self, gameid: i32, ackiid: i32, iid: i32, amount: i32) -> i32 {
+  pub fn receive(&mut self, gameid: u64, ackiid: u64, iid: u64, amount: u64) -> u64 {
     let player = self.players.entry(gameid).or_insert_with(|| PlayerData {
       incoming: 0,
       outgoing: Vec::new(),

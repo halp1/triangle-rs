@@ -1,5 +1,6 @@
 pub mod board;
 pub mod constants;
+pub mod events;
 pub mod garbage;
 pub mod multiplayer;
 pub mod queue;
@@ -15,7 +16,7 @@ use multiplayer::IgeHandler;
 use queue::types::Mino;
 use queue::{Queue, QueueInitParams, QueueSnapshot};
 use utils::{
-  damage_calc::{ComboTable, GarbageCalcConfig, GarbageCalcInput, SpinType, garbage_calc_v2},
+  damage_calc::{GarbageCalcConfig, GarbageCalcInput, garbage_calc_v2},
   increase::IncreaseTracker,
   kicks::{KICK_TABLES, legal, perform_kick},
   tetromino::{Tetromino, TetrominoInitParams, TetrominoSnapshot},
@@ -23,20 +24,29 @@ use utils::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::classes::ribbon::Hook;
+use crate::engine::utils::KickTable;
+use crate::engine::utils::tetromino::data::MinoExt;
+use crate::types::game::replay::Frame;
+use crate::types::game::{
+  Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Spin, SpinBonuses, ige,
+};
+use crate::utils::EventEmitter;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameOptions {
-  pub spin_bonuses: String,
-  pub combo_table: String,
-  pub garbage_target_bonus: String,
+  pub spin_bonuses: SpinBonuses,
+  pub combo_table: ComboTable,
+  pub garbage_target_bonus: GarbageTargetBonus,
   pub clutch: bool,
-  pub garbage_blocking: String,
-  pub stock: i32,
+  pub garbage_blocking: GarbageBlocking,
+  pub stock: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PcOptions {
   pub garbage: f64,
-  pub b2b: i32,
+  pub b2b: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,14 +57,14 @@ pub struct B2bOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct B2bCharging {
-  pub at: i32,
-  pub base: i32,
+  pub at: u64,
+  pub base: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MovementOptions {
   pub infinite: bool,
-  pub lock_resets: i32,
+  pub lock_resets: u64,
   pub lock_time: f64,
   pub may_20g: bool,
 }
@@ -79,28 +89,15 @@ pub struct MiscOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandlingOptions {
-  pub arr: f64,
-  pub das: f64,
-  pub dcd: f64,
-  pub sdf: f64,
-  pub safelock: bool,
-  pub cancel: bool,
-  pub may20g: bool,
-  pub irs: String,
-  pub ihs: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncreasableValue {
   pub value: f64,
   pub increase: f64,
-  pub margin_time: i32,
+  pub margin_time: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiplayerOptions {
-  pub opponents: Vec<i32>,
+  pub opponents: Vec<u64>,
   pub passthrough: String,
 }
 
@@ -108,27 +105,27 @@ pub struct MultiplayerOptions {
 pub struct EngineInitParams {
   pub queue: QueueInitParams,
   pub board: BoardInitParams,
-  pub kick_table: String,
+  pub kick_table: KickTable,
   pub options: GameOptions,
   pub gravity: IncreasableValue,
   pub garbage: GarbageQueueInitParams,
-  pub handling: HandlingOptions,
+  pub handling: Handling,
   pub pc: Option<PcOptions>,
   pub b2b: B2bOptions,
   pub multiplayer: Option<MultiplayerOptions>,
   pub misc: MiscOptions,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineStats {
-  pub garbage_sent: i32,
-  pub garbage_attack: i32,
-  pub garbage_receive: i32,
-  pub garbage_cleared: i32,
-  pub combo: i32,
-  pub b2b: i32,
-  pub pieces: i32,
-  pub lines: i32,
+  pub garbage_sent: u64,
+  pub garbage_attack: u64,
+  pub garbage_receive: u64,
+  pub garbage_cleared: u64,
+  pub combo: u64,
+  pub b2b: u64,
+  pub pieces: u64,
+  pub lines: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,7 +133,7 @@ pub struct ShiftState {
   pub held: bool,
   pub arr: f64,
   pub das: f64,
-  pub dir: i32,
+  pub dir: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,27 +157,24 @@ pub struct InputTime {
 pub struct InputState {
   pub l_shift: ShiftState,
   pub r_shift: ShiftState,
-  pub last_shift: i32,
+  pub last_shift: u64,
   pub keys: InputKeys,
   pub first_input_time: f64,
   pub time: InputTime,
   pub last_piece_time: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DynamicState {
-  #[serde(skip)]
   pub gravity: Option<IncreaseTracker>,
-  #[serde(skip)]
   pub garbage_multiplier: Option<IncreaseTracker>,
-  #[serde(skip)]
   pub garbage_cap: Option<IncreaseTracker>,
 }
 
 #[derive(Debug, Clone)]
 pub struct MultiplierState {
   pub options: MultiplayerOptions,
-  pub targets: Vec<i32>,
+  pub targets: Vec<u64>,
   pub passthrough_network: bool,
   pub passthrough_replay: bool,
   pub passthrough_travel: bool,
@@ -191,20 +185,20 @@ pub struct PracticeState {
   pub undo: Vec<EngineSnapshot>,
   pub redo: Vec<EngineSnapshot>,
   pub retry: bool,
-  pub retry_iter: i32,
+  pub retry_iter: u64,
   pub last_piece: Option<Box<EngineSnapshot>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SpikeState {
-  pub count: i32,
-  pub timer: i32,
+  pub count: u64,
+  pub timer: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResCache {
-  pub pieces: i32,
-  pub garbage_sent: Vec<i32>,
+  pub pieces: u64,
+  pub garbage_sent: Vec<u64>,
   pub garbage_received: Vec<OutgoingGarbage>,
   pub keys: Vec<String>,
   pub last_lock: f64,
@@ -215,28 +209,29 @@ pub struct EngineSnapshot {
   pub is_undo_redo: bool,
   pub board: Vec<Vec<Option<Tile>>>,
   pub falling: TetrominoSnapshot,
-  pub frame: i32,
+  pub frame: u64,
   pub garbage: crate::engine::garbage::GarbageQueueSnapshot,
   pub hold: Option<Mino>,
   pub hold_locked: bool,
-  pub last_spin: Option<SpinType>,
+  pub last_spin: Option<Spin>,
   pub last_was_clear: bool,
   pub queue: QueueSnapshot,
-  pub inner_queue: QueueSnapshot,
+  pub __internal_queue: QueueSnapshot,
   pub input: InputState,
   pub subframe: f64,
-  pub targets: Option<Vec<i32>>,
+  pub targets: Option<Vec<u64>>,
   pub stats: EngineStats,
   pub glock: f64,
-  pub stock: i32,
+  pub stock: u64,
   pub state: u32,
   pub spike: SpikeState,
-  pub time_frame_offset: i32,
+  pub time_frame_offset: u64,
   pub res_cache: ResCache,
   pub practice: PracticeState,
   pub ige: multiplayer::IgeHandlerSnapshot,
 }
 
+#[derive(Debug, Clone)]
 pub enum GarbageQueueVariant {
   New(GarbageQueue),
   Legacy(LegacyGarbageQueue),
@@ -250,7 +245,7 @@ impl GarbageQueueVariant {
     }
   }
 
-  fn confirm(&mut self, cid: i32, gameid: i32, frame: i32) -> bool {
+  fn confirm(&mut self, cid: u64, gameid: u64, frame: u64) -> bool {
     match self {
       Self::New(q) => q.confirm(cid, gameid, frame),
       Self::Legacy(q) => q.confirm(cid, gameid, frame),
@@ -259,24 +254,24 @@ impl GarbageQueueVariant {
 
   fn cancel(
     &mut self,
-    amount: i32,
-    piece_count: i32,
+    amount: u64,
+    piece_count: u64,
     legacy_opener: bool,
-  ) -> (i32, Vec<IncomingGarbage>) {
+  ) -> (u64, Vec<IncomingGarbage>) {
     match self {
       Self::New(q) => q.cancel(amount, piece_count, legacy_opener),
       Self::Legacy(q) => q.cancel(amount, piece_count, legacy_opener),
     }
   }
 
-  fn tank(&mut self, frame: i32, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
+  fn tank(&mut self, frame: u64, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
     match self {
       Self::New(q) => q.tank(frame, cap, hard),
       Self::Legacy(q) => q.tank(frame, cap, hard),
     }
   }
 
-  fn round(&mut self, amount: f64) -> i32 {
+  fn round(&mut self, amount: f64) -> u64 {
     match self {
       Self::New(q) => q.round(amount),
       Self::Legacy(q) => q.round(amount),
@@ -312,23 +307,32 @@ impl GarbageQueueVariant {
   }
 }
 
+#[derive(Debug, Clone)]
 pub struct Engine {
   pub queue: Queue,
-  inner_queue: Queue,
+  __internal_queue: Queue,
+
   pub held: Option<Mino>,
   pub hold_locked: bool,
+
   pub falling: Tetromino,
-  kick_table: String,
+
+  kick_table: KickTable,
+
+  undo_hook: Hook,
+
   pub board: Board,
-  pub last_spin: Option<SpinType>,
+
+  pub last_spin: Option<Spin>,
   pub last_was_clear: bool,
+
   pub stats: EngineStats,
   pub game_options: GameOptions,
   pub garbage_queue: GarbageQueueVariant,
-  pub frame: i32,
+  pub frame: u64,
   pub subframe: f64,
   pub initializer: EngineInitParams,
-  pub handling: HandlingOptions,
+  pub handling: Handling,
   pub input: InputState,
   pub pc: Option<PcOptions>,
   pub b2b: B2bOptions,
@@ -338,55 +342,41 @@ pub struct Engine {
   pub ige_handler: IgeHandler,
   pub misc: MiscOptions,
   pub state: u32,
-  pub stock: i32,
+  pub stock: u64,
   pub practice: PracticeState,
-  pub time_frame_offset: i32,
+  pub time_frame_offset: u64,
   pub spike: SpikeState,
   pub res_cache: ResCache,
-  pub events: Vec<EngineEvent>,
+  pub events: EventEmitter,
 }
 
-#[derive(Debug, Clone)]
-pub enum EngineEvent {
-  QueueAdd(Vec<Mino>),
-  GarbageReceive {
-    iid: i32,
-    amount: i32,
-    original_amount: i32,
-  },
-  GarbageConfirm {
-    iid: i32,
-    gameid: i32,
-    frame: i32,
-  },
-  GarbageTank {
-    iid: i32,
-    column: usize,
-    amount: i32,
-    size: usize,
-  },
-  GarbageCancel {
-    iid: i32,
-    amount: i32,
-    size: usize,
-  },
-  FallingNew {
-    piece: Mino,
-    is_hold: bool,
-  },
-  FallingLockPre,
-  FallingLock(LockResult),
+impl<'de> Deserialize<'de> for Engine {
+  fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+  where
+    D: serde::Deserializer<'de>,
+  {
+    unimplemented!("Engine cannot be deserialized")
+  }
 }
 
-#[derive(Debug, Clone)]
+impl Serialize for Engine {
+  fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    unimplemented!("Engine cannot be serialized")
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockResult {
   pub mino: Mino,
   pub garbage_cleared: usize,
   pub lines: usize,
-  pub spin: SpinType,
-  pub raw_garbage: Vec<i32>,
-  pub garbage: Vec<i32>,
-  pub surge: i32,
+  pub spin: Spin,
+  pub raw_garbage: Vec<u64>,
+  pub garbage: Vec<u64>,
+  pub surge: u64,
   pub stats: EngineStats,
   pub garbage_added: Option<Vec<OutgoingGarbage>>,
   pub topout: bool,
@@ -396,16 +386,19 @@ pub struct LockResult {
 
 impl Engine {
   pub fn new(params: EngineInitParams) -> Self {
+    let events = EventEmitter::new();
     let mut e = Engine {
       queue: Queue::new(params.queue.clone()),
-      inner_queue: Queue::new(params.queue.clone()),
+      __internal_queue: Queue::new(params.queue.clone()),
+      events: events.clone(),
+      undo_hook: events.hook(),
       held: None,
       hold_locked: false,
       falling: Tetromino::new(TetrominoInitParams {
         symbol: Mino::T,
         initial_rotation: 0,
-        board_height: params.board.height as i32,
-        board_width: params.board.width as i32,
+        board_height: params.board.height,
+        board_width: params.board.width,
         from: None,
       }),
       kick_table: params.kick_table.clone(),
@@ -527,9 +520,8 @@ impl Engine {
         keys: Vec::new(),
         last_lock: 0.0,
       },
-      events: Vec::new(),
     };
-    e.inner_queue.set_min_length(14);
+    e.__internal_queue.set_min_length(14);
     e.next_piece(false, false);
     e
   }
@@ -640,7 +632,7 @@ impl Engine {
       self.falling.highest_y = y1.floor();
     }
     self.falling.location[1] = y1;
-    if self.game_options.spin_bonuses != "stupid" {
+    if self.game_options.spin_bonuses != SpinBonuses::Stupid {
       self.last_spin = None;
     }
     self.state &= !STATE_FLOOR;
@@ -736,7 +728,7 @@ impl Engine {
     ((self.falling.rotation() as i32 + amount).rem_euclid(4)) as u8
   }
 
-  fn detect_tspin_kick(&self, kick_id: &str, kick: &[i32; 2]) -> bool {
+  fn detect_tspin_kick(&self, kick_id: &str, kick: &[u64; 2]) -> bool {
     ((kick_id == "23" || kick_id == "03") && kick[0] == 1 && kick[1] == -2)
       || ((kick_id == "21" || kick_id == "01") && kick[0] == -1 && kick[1] == -2)
   }
@@ -748,8 +740,8 @@ impl Engine {
       .map(|&(bx, by, c)| (bx, by, c))
       .collect();
     perform_kick(
-      &self.kick_table,
-      falling.symbol.as_str(),
+      self.kick_table,
+      falling.symbol,
       falling.location,
       [falling.aox, falling.aoy],
       !self.misc.movement.infinite && falling.total_rotations > self.misc.movement.lock_resets + 15,
@@ -767,7 +759,7 @@ impl Engine {
     new_rotation: u8,
     rotation_direction: i32,
     kick_id: &str,
-    kick: &[i32; 2],
+    kick: &[u64; 2],
   ) -> bool {
     let is_180 = rotation_direction.abs() >= 2;
     let dir = if is_180 {
@@ -785,7 +777,7 @@ impl Engine {
     }
     self.falling.location[0] = new_x;
     self.falling.location[1] = new_y;
-    self.falling.set_rotation(new_rotation as i32);
+    self.falling.set_rotation(new_rotation as u8);
 
     if dir == 1 {
       self.state |= ROTATION_RIGHT;
@@ -805,9 +797,9 @@ impl Engine {
     let spin = self.detect_spin(fin_or_tst);
     self.last_spin = Some(spin);
 
-    if spin != SpinType::None {
+    if spin != Spin::None {
       self.state |= ROTATION_SPIN;
-      if spin == SpinType::Mini {
+      if spin == Spin::Mini {
         self.state |= ROTATION_MINI;
       }
     }
@@ -822,8 +814,8 @@ impl Engine {
 
   fn rotate(&mut self, amount: i32, _is_irs: bool) -> bool {
     if self.is_sleep() {
-      if self.handling.irs == "tap" {
-        self.falling.irs = ((self.falling.irs as i32 + amount).rem_euclid(4)) as i32;
+      if self.handling.irs == Buffering::Tap {
+        self.falling.irs = ((self.falling.irs + amount).rem_euclid(4));
       }
       return false;
     }
@@ -857,7 +849,7 @@ impl Engine {
       let orig_y = self.falling.location[1];
       let orig_hy = self.falling.highest_y;
 
-      while self.falling.y() < self.board.full_height() as i32 {
+      while self.falling.y() < self.board.full_height() as u64 {
         self.falling.location[1] += 1.0;
         self.falling.highest_y += 1.0;
         let abs = self.falling.absolute_blocks();
@@ -877,8 +869,8 @@ impl Engine {
   }
 
   pub fn initiate_piece(&mut self, piece: Mino, ignore_blockout: bool, is_hold: bool) {
-    if self.handling.irs == "hold" {
-      let mut rotation_state = 0i32;
+    if self.handling.irs == Buffering::Hold {
+      let mut rotation_state = 0u64;
       if self.input.keys.rotate_ccw {
         rotation_state -= 1;
       }
@@ -888,10 +880,10 @@ impl Engine {
       if self.input.keys.rotate_180 {
         rotation_state += 2;
       }
-      self.falling.irs = rotation_state.rem_euclid(4) as i32;
+      self.falling.irs = rotation_state.rem_euclid(4) as u64;
     }
 
-    if self.handling.ihs == "hold" && self.input.keys.hold && !is_hold {
+    if self.handling.ihs == Buffering::Hold && self.input.keys.hold && !is_hold {
       self.state |= ACTION_IHS;
     }
 
@@ -926,8 +918,8 @@ impl Engine {
     self.falling = Tetromino::new(TetrominoInitParams {
       symbol: piece,
       initial_rotation: spawn_rot,
-      board_height: self.board.height as i32,
-      board_width: self.board.width as i32,
+      board_height: self.board.height as u64,
+      board_width: self.board.width as u64,
       from: Some(previous),
     });
 
@@ -940,7 +932,7 @@ impl Engine {
         self.hold(false, ignore_blockout);
       } else {
         if self.falling.irs != 0 {
-          self.rotate(self.falling.irs as i32, true);
+          self.rotate(self.falling.irs as u64, true);
           self.falling.irs = 0;
         }
         if !self.consider_blockout(!ignore_blockout || is_hold) && self.is_20g() {
@@ -954,13 +946,13 @@ impl Engine {
 
   pub fn next_piece(&mut self, ignore_blockout: bool, is_hold: bool) {
     let piece = self.queue.shift().expect("queue is empty");
-    self.inner_queue.shift();
+    self.__internal_queue.shift();
     self.initiate_piece(piece, ignore_blockout, is_hold);
   }
 
   pub fn hold(&mut self, _ihs: bool, ignore_blockout: bool) -> bool {
     if self.is_sleep() {
-      if self.handling.ihs == "tap" {
+      if self.handling.ihs == Buffering::Tap {
         self.state |= ACTION_IHS;
       }
       return false;
@@ -981,8 +973,8 @@ impl Engine {
     true
   }
 
-  fn connect_blocks(&self, blocks: &[(i32, i32)]) -> Vec<(i32, i32, u8)> {
-    let exists = |x: i32, y: i32| blocks.iter().any(|&(bx, by)| bx == x && by == y);
+  fn connect_blocks(&self, blocks: &[(u64, u64)]) -> Vec<(u64, u64, u8)> {
+    let exists = |x: u64, y: u64| blocks.iter().any(|&(bx, by)| bx == x && by == y);
 
     blocks
       .iter()
@@ -1021,19 +1013,19 @@ impl Engine {
       .collect()
   }
 
-  fn detect_spin_from_corners(&self, fin_or_tst: bool) -> SpinType {
+  fn detect_spin_from_corners(&self, fin_or_tst: bool) -> Spin {
     use utils::kicks::{
       CORNER_TABLE_J, CORNER_TABLE_L, CORNER_TABLE_S, CORNER_TABLE_T, CORNER_TABLE_Z,
     };
 
     let blocks = self.falling.blocks();
-    let abs: Vec<(i32, i32)> = blocks
+    let abs: Vec<(u64, u64)> = blocks
       .iter()
       .map(|&(bx, by, _)| (bx + self.falling.x(), -by + self.falling.y() - 1))
       .collect();
 
     if legal(&abs, &self.board.state) {
-      return SpinType::None;
+      return Spin::None;
     }
 
     let symbol = self.falling.symbol.as_str().to_ascii_lowercase();
@@ -1063,7 +1055,7 @@ impl Engine {
         }
       }
     } else {
-      let table_opt: Option<&[[(i32, i32); 4]; 4]> = if is_z {
+      let table_opt: Option<&[[(u64, u64); 4]; 4]> = if is_z {
         Some(&CORNER_TABLE_Z)
       } else if is_l {
         Some(&CORNER_TABLE_L)
@@ -1086,21 +1078,21 @@ impl Engine {
           }
         }
       } else {
-        return SpinType::None;
+        return Spin::None;
       }
     }
 
     if corners < 3 {
-      return SpinType::None;
+      return Spin::None;
     }
 
     let spin_bonuses = self.spin_bonuses_mini();
-    let mut spin = SpinType::Normal;
+    let mut spin = Spin::Normal;
     if spin_bonuses && front_corners != 2 {
-      spin = SpinType::Mini;
+      spin = Spin::Mini;
     }
     if fin_or_tst {
-      spin = SpinType::Normal;
+      spin = Spin::Normal;
     }
     spin
   }
@@ -1113,105 +1105,90 @@ impl Engine {
       .unwrap_or(false)
   }
 
-  fn max_spin(a: SpinType, b: SpinType) -> SpinType {
+  fn max_spin(a: Spin, b: Spin) -> Spin {
     let score = |s| match s {
-      SpinType::Normal => 2,
-      SpinType::Mini => 1,
-      SpinType::None => 0,
+      Spin::Normal => 2,
+      Spin::Mini => 1,
+      Spin::None => 0,
     };
     if score(b) >= score(a) { b } else { a }
   }
 
-  fn detect_spin(&self, fin_or_tst: bool) -> SpinType {
+  fn detect_spin(&self, fin_or_tst: bool) -> Spin {
     let bonuses = &self.game_options.spin_bonuses;
-    if bonuses == "none" {
-      return SpinType::None;
+    if bonuses == &SpinBonuses::None {
+      return Spin::None;
     }
 
     let symbol = self.falling.symbol.as_str().to_ascii_lowercase();
-    let t_spin = if [
-      "all",
-      "all-mini",
-      "all-mini+",
-      "all+",
-      "T-spins",
-      "T-spins+",
-    ]
-    .contains(&bonuses.as_str())
-      && symbol == "t"
-    {
-      Some(self.detect_spin_from_corners(fin_or_tst))
-    } else {
-      None
+    let t_spin = match bonuses {
+      SpinBonuses::All
+      | SpinBonuses::AllMini
+      | SpinBonuses::AllMiniPlus
+      | SpinBonuses::AllPlus
+      | SpinBonuses::TSpins
+      | SpinBonuses::TSpinsPlus => {
+        if symbol == "t" {
+          Some(self.detect_spin_from_corners(fin_or_tst))
+        } else {
+          None
+        }
+      }
+      _ => None,
     };
 
     let all_spin = self.falling.is_all_spin_position(&self.board.state);
 
-    match bonuses.as_str() {
-      "stupid" => {
+    match bonuses {
+      SpinBonuses::Stupid => {
         if self.falling.is_stupid_spin_position(&self.board.state) {
-          SpinType::Normal
+          Spin::Normal
         } else {
-          SpinType::None
+          Spin::None
         }
       }
-      "T-spins" => t_spin.unwrap_or(SpinType::None),
-      "T-spins+" => Self::max_spin(
-        t_spin.unwrap_or(SpinType::None),
+      SpinBonuses::TSpins => t_spin.unwrap_or(Spin::None),
+      SpinBonuses::TSpinsPlus => Self::max_spin(
+        t_spin.unwrap_or(Spin::None),
         if all_spin && symbol == "t" {
-          SpinType::Mini
+          Spin::Mini
         } else {
-          SpinType::None
+          Spin::None
         },
       ),
-      "all" => t_spin.unwrap_or(SpinType::None).max_with(if all_spin {
-        SpinType::Normal
-      } else {
-        SpinType::None
-      }),
-      "all-mini" => t_spin.unwrap_or(SpinType::None).max_with(if all_spin {
-        SpinType::Mini
-      } else {
-        SpinType::None
-      }),
-      "all+" => Self::max_spin(
-        t_spin.unwrap_or(SpinType::None),
+      SpinBonuses::All => {
+        t_spin
+          .unwrap_or(Spin::None)
+          .max_with(if all_spin { Spin::Normal } else { Spin::None })
+      }
+      SpinBonuses::AllMini => {
+        t_spin
+          .unwrap_or(Spin::None)
+          .max_with(if all_spin { Spin::Mini } else { Spin::None })
+      }
+      SpinBonuses::AllPlus => Self::max_spin(
+        t_spin.unwrap_or(Spin::None),
         if all_spin {
           if symbol == "t" {
-            SpinType::Mini
+            Spin::Mini
           } else {
-            SpinType::Normal
+            Spin::Normal
           }
         } else {
-          SpinType::None
+          Spin::None
         },
       ),
-      "all-mini+" => Self::max_spin(
-        t_spin.unwrap_or(SpinType::None),
-        if all_spin {
-          SpinType::Mini
-        } else {
-          SpinType::None
-        },
+      SpinBonuses::AllMiniPlus => Self::max_spin(
+        t_spin.unwrap_or(Spin::None),
+        if all_spin { Spin::Mini } else { Spin::None },
       ),
-      "mini-only" => {
-        let t = t_spin.unwrap_or(SpinType::None);
-        let base = if t == SpinType::Normal {
-          SpinType::Mini
-        } else {
-          t
-        };
-        Self::max_spin(
-          base,
-          if all_spin {
-            SpinType::Mini
-          } else {
-            SpinType::None
-          },
-        )
+      SpinBonuses::MiniOnly => {
+        let t = t_spin.unwrap_or(Spin::None);
+        let base = if t == Spin::Normal { Spin::Mini } else { t };
+        Self::max_spin(base, if all_spin { Spin::Mini } else { Spin::None })
       }
-      "handheld" => self.detect_spin_from_corners(fin_or_tst),
-      _ => SpinType::None,
+      SpinBonuses::Handheld => self.detect_spin_from_corners(fin_or_tst),
+      _ => Spin::None,
     }
   }
 
@@ -1219,9 +1196,9 @@ impl Engine {
     self.hold_locked = false;
 
     let blocks = self.falling.blocks().to_vec();
-    let mut placed: Vec<(Mino, i32, i32)> = Vec::with_capacity(blocks.len());
-    let mut placed_pos: Vec<(i32, i32)> = Vec::with_capacity(blocks.len());
-    let mut connect_input: Vec<(i32, i32)> = Vec::with_capacity(blocks.len());
+    let mut placed: Vec<(Mino, u64, u64)> = Vec::with_capacity(blocks.len());
+    let mut placed_pos: Vec<(u64, u64)> = Vec::with_capacity(blocks.len());
+    let mut connect_input: Vec<(u64, u64)> = Vec::with_capacity(blocks.len());
 
     for &(bx, by, _) in &blocks {
       let x = self.falling.x() + bx;
@@ -1232,7 +1209,7 @@ impl Engine {
     }
 
     let connected = self.connect_blocks(&connect_input);
-    let board_add: Vec<(Tile, i32, i32)> = connected
+    let board_add: Vec<(Tile, u64, u64)> = connected
       .iter()
       .map(|&(cx, cy, cs)| {
         (
@@ -1252,14 +1229,14 @@ impl Engine {
     let garbage_cleared = clear_res.garbage_cleared;
     let pc = self.board.perfect_clear();
 
-    self.stats.garbage_cleared += garbage_cleared as i32;
+    self.stats.garbage_cleared += garbage_cleared as u64;
 
-    let mut broke_b2b: Option<i32> = Some(self.stats.b2b);
-    let last_spin = self.last_spin.unwrap_or(SpinType::None);
+    let mut broke_b2b: Option<u64> = Some(self.stats.b2b);
+    let last_spin = self.last_spin.unwrap_or(Spin::None);
 
     if lines > 0 {
       self.stats.combo += 1;
-      let is_powerful = (last_spin != SpinType::None) || lines >= 4;
+      let is_powerful = (last_spin != Spin::None) || lines >= 4;
       let pc_b2b = pc && self.pc.as_ref().map(|p| p.b2b).unwrap_or(0) > 0;
 
       if is_powerful && !pc_b2b {
@@ -1280,21 +1257,16 @@ impl Engine {
 
     let special_bonus = self.garbage_queue.options().special_bonus
       && garbage_cleared > 0
-      && (last_spin != SpinType::None || lines >= 4);
-    let g_special_bonus: i32 = if special_bonus { 1 } else { 0 };
+      && (last_spin != Spin::None || lines >= 4);
+    let g_special_bonus: u64 = if special_bonus { 1 } else { 0 };
 
-    let combo_table = match self.game_options.combo_table.as_str() {
-      "multiplier" => ComboTable::Multiplier,
-      "classic guideline" => ComboTable::ClassicGuideline,
-      "modern guideline" => ComboTable::ModernGuideline,
-      _ => ComboTable::None,
-    };
+    let combo_table;
 
     let calc_input = GarbageCalcInput {
       b2b: self.stats.b2b.max(0),
       combo: self.stats.combo.max(0),
       enemies: 0,
-      lines: lines as i32,
+      lines: lines as u64,
       piece: self.falling.symbol,
       spin: last_spin,
     };
@@ -1308,7 +1280,7 @@ impl Engine {
     let garbage_result = garbage_calc_v2(&calc_input, &calc_config);
 
     let garb_mult = self.dynamic.1.get();
-    let mut g_events: Vec<i32> = Vec::new();
+    let mut g_events: Vec<u64> = Vec::new();
     if garbage_result.garbage > 0.0 || g_special_bonus > 0 {
       let rounded = self
         .garbage_queue
@@ -1321,9 +1293,9 @@ impl Engine {
       if let Some(charging) = &self.b2b.charging {
         if btb + 1 > charging.at {
           surged = ((btb as f64 - charging.at as f64 + charging.base as f64 + 1.0) * garb_mult)
-            .floor() as i32;
-          let g1 = (surged as f64 / 3.0).round() as i32;
-          let g2 = (surged as f64 / 3.0).round() as i32;
+            .floor() as u64;
+          let g1 = (surged as f64 / 3.0).round() as u64;
+          let g2 = (surged as f64 / 3.0).round() as u64;
           let g3 = surged - 2 * g1;
           g_events.splice(0..0, [g1, g2, g3]);
         }
@@ -1337,7 +1309,7 @@ impl Engine {
       }
     }
 
-    let mut filtered_garbage: Vec<i32> = g_events.into_iter().filter(|&g| g > 0).collect();
+    let mut filtered_garbage: Vec<u64> = g_events.into_iter().filter(|&g| g > 0).collect();
     let raw_garbage = filtered_garbage.clone();
 
     for &g in &raw_garbage {
@@ -1414,7 +1386,7 @@ impl Engine {
       }
     }
 
-    self.events.push(EngineEvent::FallingLockPre);
+    self.events.emit(events::falling::LockPre {});
     self.next_piece(false, false);
     self.last_spin = None;
 
@@ -1423,7 +1395,7 @@ impl Engine {
       !legal(&abs, &self.board.state)
     };
 
-    let sent_total: i32 = filtered_garbage.iter().sum();
+    let sent_total: u64 = filtered_garbage.iter().sum();
 
     if !filtered_garbage.is_empty() {
       if let Some(mp) = &self.multiplayer {
@@ -1453,7 +1425,7 @@ impl Engine {
     self.res_cache.last_lock = self.frame as f64 + self.subframe;
 
     self.stats.pieces += 1;
-    self.stats.lines += lines as i32;
+    self.stats.lines += lines as u64;
 
     let result = LockResult {
       mino: self.falling.symbol,
@@ -1552,9 +1524,9 @@ impl Engine {
     }
 
     let arr_mult = if arr == 0.0 {
-      self.board.width as i32
+      self.board.width as u64
     } else {
-      (new_arr / arr).floor() as i32
+      (new_arr / arr).floor() as u64
     };
     let consume = arr * arr_mult as f64;
     if shift == 0 {
@@ -1608,7 +1580,7 @@ impl Engine {
 
   pub fn move_right(&mut self) -> bool {
     let res = self.falling.move_right(&self.board.state);
-    if res && self.game_options.spin_bonuses != "stupid" {
+    if res && self.game_options.spin_bonuses != SpinBonuses::Stupid {
       self.last_spin = None;
     }
     res
@@ -1616,7 +1588,7 @@ impl Engine {
 
   pub fn move_left(&mut self) -> bool {
     let res = self.falling.move_left(&self.board.state);
-    if res && self.game_options.spin_bonuses != "stupid" {
+    if res && self.game_options.spin_bonuses != SpinBonuses::Stupid {
       self.last_spin = None;
     }
     res
@@ -1624,7 +1596,7 @@ impl Engine {
 
   pub fn das_right(&mut self) -> bool {
     let res = self.falling.das_right(&self.board.state);
-    if res && self.game_options.spin_bonuses != "stupid" {
+    if res && self.game_options.spin_bonuses != SpinBonuses::Stupid {
       self.last_spin = None;
     }
     res
@@ -1632,7 +1604,7 @@ impl Engine {
 
   pub fn das_left(&mut self) -> bool {
     let res = self.falling.das_left(&self.board.state);
-    if res && self.game_options.spin_bonuses != "stupid" {
+    if res && self.game_options.spin_bonuses != SpinBonuses::Stupid {
       self.last_spin = None;
     }
     res
@@ -1640,7 +1612,7 @@ impl Engine {
 
   pub fn soft_drop(&mut self) -> bool {
     let res = self.falling.soft_drop(&self.board.state);
-    if res && self.game_options.spin_bonuses != "stupid" {
+    if res && self.game_options.spin_bonuses != SpinBonuses::Stupid {
       self.last_spin = None;
     }
     res
@@ -1665,10 +1637,10 @@ impl Engine {
     if !self.misc.allowed.undo || self.practice.undo.is_empty() {
       return false;
     }
-    let snap = self.snapshot(true);
+    let snap = self.snapshot_internal(true);
     self.practice.redo.push(snap);
     let prev = self.practice.undo.pop().unwrap();
-    self.from_snapshot(&prev, true);
+    self.from_snapshot(&prev);
     self.practice.retry = false;
     self.practice.retry_iter = 0;
     true
@@ -1678,10 +1650,10 @@ impl Engine {
     if !self.misc.allowed.undo || self.practice.redo.is_empty() {
       return false;
     }
-    let snap = self.snapshot(true);
+    let snap = self.snapshot_internal(true);
     self.practice.undo.push(snap);
     let next = self.practice.redo.pop().unwrap();
-    self.from_snapshot(&next, true);
+    self.from_snapshot(&next);
     self.practice.retry = false;
     self.practice.retry_iter = 0;
     true
@@ -1702,9 +1674,9 @@ impl Engine {
     self.practice.retry_iter = 0;
     self.held = None;
     self.hold_locked = false;
-    self.inner_queue.clear();
-    self.inner_queue.repopulate_once();
-    self.queue.from_snapshot(&self.inner_queue.snapshot());
+    self.__internal_queue.clear();
+    self.__internal_queue.repopulate_once();
+    self.queue.from_snapshot(&self.__internal_queue.snapshot());
     self.board.reset();
     self.garbage_queue.reset();
     self.stats = EngineStats {
@@ -1725,9 +1697,8 @@ impl Engine {
     self.garbage_queue.receive(garbages);
   }
 
-  pub fn tick(&mut self, frames: &[ReplayFrame]) -> ResCache {
+  pub fn tick(&mut self, frames: &[Frame]) -> ResCache {
     self.subframe = 0.0;
-    self.events.clear();
 
     for frame in frames {
       match frame {
@@ -1895,50 +1866,67 @@ impl Engine {
     }
   }
 
-  fn handle_ige(&mut self, ige: &IgeFrame) {
+  fn handle_ige(&mut self, ige: ige::IGE, frame: u64) {
     match &ige.data {
-      IgeData::GarbageInteraction {
-        gameid,
-        ackiid,
-        iid,
-        amt,
-        size,
-      } => {
-        let original = *amt;
-        let amount = if self
-          .multiplayer
-          .as_ref()
-          .map(|m| m.passthrough_network)
-          .unwrap_or(false)
-        {
-          self.ige_handler.receive(*gameid, *ackiid, *iid, *amt)
-        } else {
-          *amt
-        };
-        let gf = i32::MAX / 2 - self.garbage_queue.options().garbage.speed;
-        self.receive_garbage(vec![IncomingGarbage {
-          frame: gf,
-          amount,
-          size: *size,
-          cid: *iid,
-          gameid: *gameid,
-          confirmed: false,
-        }]);
-        self.stats.garbage_receive += amount;
-        self.events.push(EngineEvent::GarbageReceive {
-          iid: *iid,
-          amount,
-          original_amount: original,
-        });
-      }
-      IgeData::GarbageConfirm { gameid, iid, frame } => {
-        self.garbage_queue.confirm(*iid, *gameid, *frame);
-        self.events.push(EngineEvent::GarbageConfirm {
-          iid: *iid,
-          gameid: *gameid,
-          frame: *frame,
-        });
-      }
+      &ige::IGEData::Interaction(interaction) => match interaction {
+        ige::interaction::InteractionData::Garbage(data) => {
+          let ige::interaction::Garbage {
+            gameid,
+            ackiid,
+            iid,
+            amt,
+            size,
+            ..
+          } = data;
+          let original = amt;
+          let amount = if self
+            .multiplayer
+            .as_ref()
+            .map(|m| m.passthrough_network)
+            .unwrap_or(false)
+          {
+            self.ige_handler.receive(gameid, ackiid, iid, amt)
+          } else {
+            amt
+          };
+          let gf = u64::MAX / 2 - self.garbage_queue.options().garbage.speed;
+          self.receive_garbage(vec![IncomingGarbage {
+            frame: gf,
+            amount,
+            size: size,
+            cid: iid,
+            gameid: gameid,
+            confirmed: false,
+          }]);
+          self.stats.garbage_receive += amount;
+          self.events.emit(events::garbage::Receive {
+            iid: iid,
+            amount,
+            original_amount: original,
+          });
+        }
+        _ => {}
+      },
+
+      &ige::IGEData::InteractionConfirm(interaction) => match interaction {
+        ige::interaction::InteractionData::Garbage(data) => {
+          let ige::interaction::Garbage {
+            gameid,
+            ackiid,
+            iid,
+            amt,
+            size,
+            ..
+          } = data;
+          self.garbage_queue.confirm(iid, gameid, frame);
+          self.events.emit(events::garbage::Confirm {
+            iid: iid,
+            gameid: gameid,
+            frame: frame,
+          });
+        }
+        _ => {}
+      },
       IgeData::Target { targets } => {
         if let Some(mp) = &mut self.multiplayer {
           mp.targets = targets.clone();
@@ -1947,7 +1935,11 @@ impl Engine {
     }
   }
 
-  pub fn snapshot(&self, is_undo_redo: bool) -> EngineSnapshot {
+  pub fn snapshot(&self) -> EngineSnapshot {
+    self.snapshot_internal(false)
+  }
+
+  fn snapshot_internal(&self, is_undo_redo: bool) -> EngineSnapshot {
     EngineSnapshot {
       is_undo_redo,
       board: self.board.state.clone(),
@@ -1959,7 +1951,7 @@ impl Engine {
       last_spin: self.last_spin,
       last_was_clear: self.last_was_clear,
       queue: self.queue.snapshot(),
-      inner_queue: self.inner_queue.snapshot(),
+      __internal_queue: self.__internal_queue.snapshot(),
       input: self.input.clone(),
       subframe: self.subframe,
       targets: self.multiplayer.as_ref().map(|m| m.targets.clone()),
@@ -1985,25 +1977,20 @@ impl Engine {
     }
   }
 
-  pub fn from_snapshot(&mut self, snapshot: &EngineSnapshot, is_undo_redo: bool) {
+  pub fn from_snapshot(&mut self, snapshot: &EngineSnapshot) {
+    let is_undo_redo = snapshot.is_undo_redo;
+
     self.board.state = snapshot.board.clone();
-    let spawn_rot = {
-      let tables = &*KICK_TABLES;
-      if let Some(table) = tables.get(self.kick_table.as_str()) {
-        table
-          .spawn_rotation
-          .get(snapshot.falling.symbol.as_str())
-          .copied()
-          .unwrap_or(0)
-      } else {
-        0
-      }
-    };
-    self.falling = Tetromino::from_snapshot(
-      &snapshot.falling,
-      self.board.height as i32,
-      self.board.width as i32,
-    );
+
+    let spawn_rot = self
+      .kick_table
+      .data()
+      .spawn_rotation
+      .get(snapshot.falling.symbol.as_str())
+      .copied()
+      .unwrap_or(0);
+
+    self.falling = Tetromino::from_snapshot(&snapshot.falling, self.board.height, self.board.width);
 
     if !is_undo_redo {
       self.frame = snapshot.frame;
@@ -2016,7 +2003,9 @@ impl Engine {
     self.last_spin = snapshot.last_spin;
     self.last_was_clear = snapshot.last_was_clear;
     self.queue.from_snapshot(&snapshot.queue);
-    self.inner_queue.from_snapshot(&snapshot.inner_queue);
+    self
+      .__internal_queue
+      .from_snapshot(&snapshot.__internal_queue);
 
     let p = &self.initializer;
     self.dynamic = (
@@ -2092,73 +2081,16 @@ impl Engine {
   }
 
   pub fn get_preview(&self, piece: Mino) -> &utils::tetromino::data::PreviewData {
-    let symbol = piece.as_str().to_ascii_lowercase();
-    let tetrominos = &*utils::tetromino::data::TETROMINOES;
-    &tetrominos
-      .get(symbol.as_str())
-      .expect("unknown piece")
-      .preview
-  }
-
-  pub fn current_spike(&self) -> i32 {
-    self.spike.count
-  }
-
-  pub fn kick_table_name(&self) -> &str {
-    &self.kick_table
-  }
-  pub fn set_kick_table(&mut self, name: String) {
-    self.kick_table = name;
+    MinoExt::from(piece).preview()
   }
 }
 
-// ─── Replay frame types ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct KeyEvent {
-  pub subframe: f64,
-  pub key: String,
-  pub hoisted: bool,
+trait SpinExt {
+  fn max_with(self, other: Spin) -> Spin;
 }
 
-#[derive(Debug, Clone)]
-pub enum IgeData {
-  GarbageInteraction {
-    gameid: i32,
-    ackiid: i32,
-    iid: i32,
-    amt: i32,
-    size: usize,
-  },
-  GarbageConfirm {
-    gameid: i32,
-    iid: i32,
-    frame: i32,
-  },
-  Target {
-    targets: Vec<i32>,
-  },
-}
-
-#[derive(Debug, Clone)]
-pub struct IgeFrame {
-  pub subframe: f64,
-  pub data: IgeData,
-}
-
-#[derive(Debug, Clone)]
-pub enum ReplayFrame {
-  Keydown(KeyEvent),
-  Keyup(KeyEvent),
-  Ige(IgeFrame),
-}
-
-trait SpinTypeExt {
-  fn max_with(self, other: SpinType) -> SpinType;
-}
-
-impl SpinTypeExt for SpinType {
-  fn max_with(self, other: SpinType) -> SpinType {
+impl SpinExt for Spin {
+  fn max_with(self, other: Spin) -> Spin {
     Engine::max_spin(self, other)
   }
 }

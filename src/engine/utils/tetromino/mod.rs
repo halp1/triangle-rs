@@ -3,7 +3,6 @@ pub mod types;
 
 use crate::engine::board::Tile;
 use crate::engine::queue::types::Mino;
-use crate::engine::utils::kicks::perform_kick;
 use data::TETROMINOES;
 pub use data::{MatrixData, PreviewData, TetrominoEntry};
 pub use types::{Block, ROT_0, ROT_1, ROT_2, ROT_3, Rotation};
@@ -13,26 +12,26 @@ pub struct TetrominoSnapshot {
   pub symbol: Mino,
   pub location: [f64; 2],
   pub locking: f64,
-  pub lock_resets: i32,
-  pub rot_resets: i32,
-  pub safe_lock: i32,
+  pub lock_resets: u64,
+  pub rot_resets: u64,
+  pub safe_lock: u64,
   pub highest_y: f64,
   pub rotation: Rotation,
-  pub falling_rotations: i32,
-  pub total_rotations: i32,
+  pub falling_rotations: u64,
+  pub total_rotations: u64,
   pub irs: i32,
   pub ihs: bool,
   pub aox: i32,
   pub aoy: i32,
-  pub keys: i32,
+  pub keys: u64,
 }
 
 #[derive(Debug, Clone)]
 pub struct TetrominoInitParams {
   pub symbol: Mino,
   pub initial_rotation: Rotation,
-  pub board_height: i32,
-  pub board_width: i32,
+  pub board_height: usize,
+  pub board_width: usize,
   pub from: Option<TetrominoSnapshot>,
 }
 
@@ -44,25 +43,23 @@ pub struct Tetromino {
   pub location: [f64; 2],
 
   pub locking: f64,
-  pub lock_resets: i32,
-  pub rot_resets: i32,
-  pub safe_lock: i32,
+  pub lock_resets: u64,
+  pub rot_resets: u64,
+  pub safe_lock: u64,
   pub highest_y: f64,
-  pub falling_rotations: i32,
-  pub total_rotations: i32,
+  pub falling_rotations: u64,
+  pub total_rotations: u64,
   pub irs: i32,
   pub ihs: bool,
   pub aox: i32,
   pub aoy: i32,
-  pub keys: i32,
+  pub keys: u64,
 }
 
 impl Tetromino {
   pub fn new(params: TetrominoInitParams) -> Self {
-    let symbol_lower = params.symbol.as_str().to_ascii_lowercase();
     let tetromino = TETROMINOES
-      .get(symbol_lower.as_str())
-      .expect("unknown mino type");
+      .get(&params.symbol.into()).expect("unknown mino type");
 
     let states: Vec<Vec<Block>> = tetromino.matrix.data.iter().map(|r| r.clone()).collect();
 
@@ -227,7 +224,7 @@ impl Tetromino {
     }
   }
 
-  pub fn from_snapshot(snapshot: &TetrominoSnapshot, board_height: i32, board_width: i32) -> Self {
+  pub fn from_snapshot(snapshot: &TetrominoSnapshot, board_height: usize, board_width: usize) -> Self {
     let mut t = Tetromino::new(TetrominoInitParams {
       symbol: snapshot.symbol,
       initial_rotation: snapshot.rotation,

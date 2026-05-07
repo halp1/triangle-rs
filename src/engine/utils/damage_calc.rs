@@ -1,4 +1,7 @@
-use crate::engine::queue::types::Mino;
+use crate::{
+  engine::queue::Mino,
+  types::game::{ComboTable, GarbageTargetBonus, Spin, SpinBonuses},
+};
 
 const SINGLE: f64 = 0.0;
 const DOUBLE: f64 = 1.0;
@@ -22,30 +25,11 @@ const COMBO_MINIFIER_LOG: f64 = 1.25;
 const COMBO_BONUS: f64 = 0.25;
 pub const ALL_CLEAR: f64 = 10.0;
 
-static COMBO_TABLE_NONE: &[i32] = &[0];
-static COMBO_TABLE_CLASSIC: &[i32] = &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5];
-static COMBO_TABLE_MODERN: &[i32] = &[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpinType {
-  None,
-  Mini,
-  Normal,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ComboTable {
-  None,
-  ClassicGuideline,
-  ModernGuideline,
-  Multiplier,
-}
-
 #[derive(Debug, Clone)]
 pub struct GarbageCalcConfig {
-  pub spin_bonuses: String,
+  pub spin_bonuses: SpinBonuses,
   pub combo_table: ComboTable,
-  pub garbage_target_bonus: String,
+  pub garbage_target_bonus: GarbageTargetBonus,
   pub b2b_chaining: bool,
   pub b2b_charging: bool,
 }
@@ -53,7 +37,7 @@ pub struct GarbageCalcConfig {
 #[derive(Debug, Clone)]
 pub struct GarbageCalcInput {
   pub lines: i32,
-  pub spin: SpinType,
+  pub spin: Spin,
   pub piece: Mino,
   pub b2b: i32,
   pub combo: i32,
@@ -76,58 +60,48 @@ pub fn garbage_calc_v2(input: &GarbageCalcInput, config: &GarbageCalcConfig) -> 
     enemies,
   } = *input;
 
-  let spin_opt = match spin {
-    SpinType::None => None,
-    SpinType::Mini => Some(SpinType::Mini),
-    SpinType::Normal => Some(SpinType::Normal),
-  };
-
   let mut garbage: f64 = match lines {
-    0 => match spin_opt {
-      Some(SpinType::Mini) => TSPIN_MINI,
-      Some(SpinType::Normal) => TSPIN,
-      _ => 0.0,
+    0 => match spin {
+      Spin::Mini => TSPIN_MINI,
+      Spin::Normal => TSPIN,
+      Spin::None => 0.0,
     },
-    1 => match spin_opt {
-      Some(SpinType::Mini) => TSPIN_MINI_SINGLE,
-      Some(SpinType::Normal) => TSPIN_SINGLE,
-      _ => SINGLE,
+    1 => match spin {
+      Spin::Mini => TSPIN_MINI_SINGLE,
+      Spin::Normal => TSPIN_SINGLE,
+      Spin::None => SINGLE,
     },
-    2 => match spin_opt {
-      Some(SpinType::Mini) => TSPIN_MINI_DOUBLE,
-      Some(SpinType::Normal) => TSPIN_DOUBLE,
-      _ => DOUBLE,
+    2 => match spin {
+      Spin::Mini => TSPIN_MINI_DOUBLE,
+      Spin::Normal => TSPIN_DOUBLE,
+      Spin::None => DOUBLE,
     },
-    3 => match spin_opt {
-      Some(SpinType::Mini) => TSPIN_MINI_TRIPLE,
-      Some(SpinType::Normal) => TSPIN_TRIPLE,
-      _ => TRIPLE,
+    3 => match spin {
+      Spin::Mini => TSPIN_MINI_TRIPLE,
+      Spin::Normal => TSPIN_TRIPLE,
+      Spin::None => TRIPLE,
     },
-    4 => {
-      if spin_opt.is_some() {
-        TSPIN_QUAD
-      } else {
-        QUAD
-      }
-    }
-    5 => {
-      if spin_opt.is_some() {
-        TSPIN_PENTA
-      } else {
-        PENTA
-      }
-    }
+    4 => match spin {
+      Spin::Mini | Spin::Normal => TSPIN_QUAD,
+      Spin::None => QUAD,
+    },
+    5 => match spin {
+      Spin::Mini | Spin::Normal => TSPIN_PENTA,
+      Spin::None => PENTA,
+    },
     n => {
       let t = (n - 5) as f64;
-      if spin_opt.is_some() {
-        TSPIN_PENTA + 2.0 * t
-      } else {
-        PENTA + t
+      match spin {
+        Spin::Mini | Spin::Normal => TSPIN_PENTA + 2.0 * t,
+        Spin::None => PENTA + t,
       }
     }
   };
 
-  if spin_opt.is_some() && config.spin_bonuses == "handheld" && piece != Mino::T {
+  if matches!(spin, Spin::Mini | Spin::Normal)
+    && config.spin_bonuses == SpinBonuses::Handheld
+    && piece != Mino::T
+  {
     garbage /= 2.0;
   }
 
@@ -156,20 +130,15 @@ pub fn garbage_calc_v2(input: &GarbageCalcInput, config: &GarbageCalcConfig) -> 
         }
       }
       ref table => {
-        let table_data: &[i32] = match table {
-          ComboTable::None => COMBO_TABLE_NONE,
-          ComboTable::ClassicGuideline => COMBO_TABLE_CLASSIC,
-          ComboTable::ModernGuideline => COMBO_TABLE_MODERN,
-          _ => COMBO_TABLE_NONE,
-        };
+        let table_data: &[f64] = table.data().as_slice();
         let idx = ((combo - 1) as usize).min(table_data.len().saturating_sub(1));
-        garbage += table_data[idx] as f64;
+        garbage += table_data[idx];
       }
     }
   }
 
   let mut garbage_bonus: f64 = 0.0;
-  if lines > 0 && config.garbage_target_bonus != "none" {
+  if lines > 0 && config.garbage_target_bonus != GarbageTargetBonus::None {
     let target_bonus: f64 = match enemies {
       0 | 1 => 0.0,
       2 => 1.0,
@@ -179,7 +148,7 @@ pub fn garbage_calc_v2(input: &GarbageCalcInput, config: &GarbageCalcConfig) -> 
       _ => 9.0,
     };
 
-    if config.garbage_target_bonus == "normal" {
+    if config.garbage_target_bonus == GarbageTargetBonus::Offensive {
       garbage += target_bonus;
     } else {
       garbage_bonus = target_bonus;

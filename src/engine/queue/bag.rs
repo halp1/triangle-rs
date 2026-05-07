@@ -448,15 +448,17 @@ pub enum BagType {
   Bag7PlusX,
 }
 
-pub fn make_bag(bag_type: BagType, seed: i64) -> Box<dyn Bag> {
-  match bag_type {
-    BagType::Bag7 => Box::new(Bag7::new(seed)),
-    BagType::Bag14 => Box::new(Bag14::new(seed)),
-    BagType::Classic => Box::new(Classic::new(seed)),
-    BagType::Pairs => Box::new(Pairs::new(seed)),
-    BagType::TotalMayhem => Box::new(TotalMayhem::new(seed)),
-    BagType::Bag7Plus1 => Box::new(Bag7Plus1::new(seed)),
-    BagType::Bag7Plus2 => Box::new(Bag7Plus2::new(seed)),
-    BagType::Bag7PlusX => Box::new(Bag7PlusX::new(seed)),
+impl BagType {
+  pub fn bag(bag_type: BagType, seed: i64) -> Box<dyn Bag> {
+    match bag_type {
+      BagType::Bag7 => Box::new(Bag7::new(seed)),
+      BagType::Bag14 => Box::new(Bag14::new(seed)),
+      BagType::Classic => Box::new(Classic::new(seed)),
+      BagType::Pairs => Box::new(Pairs::new(seed)),
+      BagType::TotalMayhem => Box::new(TotalMayhem::new(seed)),
+      BagType::Bag7Plus1 => Box::new(Bag7Plus1::new(seed)),
+      BagType::Bag7Plus2 => Box::new(Bag7Plus2::new(seed)),
+      BagType::Bag7PlusX => Box::new(Bag7PlusX::new(seed)),
+    }
   }
 }

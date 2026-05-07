@@ -11,18 +11,18 @@ pub struct GarbageQueueInitParams {
   pub multiplier: MultiplierParams,
   pub bombs: bool,
   pub seed: i64,
-  pub board_width: usize,
+  pub board_width: u64,
   pub rounding: RoundingMode,
-  pub opener_phase: i32,
+  pub opener_phase: u64,
   pub special_bonus: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GarbageCapParams {
   pub value: f64,
-  pub margin_time: i32,
+  pub margin_time: u64,
   pub increase: f64,
-  pub absolute: i32,
+  pub absolute: u64,
   pub max: f64,
 }
 
@@ -31,21 +31,21 @@ pub struct MessinessParams {
   pub change: f64,
   pub within: f64,
   pub nosame: bool,
-  pub timeout: i32,
+  pub timeout: u64,
   pub center: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GarbageSpeedParams {
-  pub speed: i32,
-  pub hole_size: usize,
+  pub speed: u64,
+  pub hole_size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiplierParams {
   pub value: f64,
   pub increase: f64,
-  pub margin_time: i32,
+  pub margin_time: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,31 +57,31 @@ pub enum RoundingMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IncomingGarbage {
-  pub frame: i32,
-  pub amount: i32,
-  pub size: usize,
-  pub cid: i32,
-  pub gameid: i32,
+  pub frame: u64,
+  pub amount: u64,
+  pub size: u64,
+  pub cid: u64,
+  pub gameid: u64,
   pub confirmed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutgoingGarbage {
-  pub frame: i32,
-  pub amount: i32,
-  pub size: usize,
-  pub id: i32,
-  pub column: usize,
+  pub frame: u64,
+  pub amount: u64,
+  pub size: u64,
+  pub id: u64,
+  pub column: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GarbageQueueSnapshot {
   pub seed: i64,
-  pub last_tank_time: i32,
-  pub last_column: Option<i32>,
-  pub sent: i32,
+  pub last_tank_time: u64,
+  pub last_column: Option<u64>,
+  pub sent: u64,
   pub has_changed_column: bool,
-  pub last_received_count: i32,
+  pub last_received_count: u64,
   pub queue: Vec<IncomingGarbage>,
 }
 
@@ -89,18 +89,18 @@ pub struct GarbageQueueSnapshot {
 pub struct GarbageQueue {
   pub options: GarbageQueueInitParams,
   pub queue: Vec<IncomingGarbage>,
-  pub last_tank_time: i32,
-  pub last_column: Option<i32>,
+  pub last_tank_time: u64,
+  pub last_column: Option<u64>,
   pub has_changed_column: bool,
-  pub last_received_count: i32,
+  pub last_received_count: u64,
   pub rng: Rng,
-  pub sent: i32,
+  pub sent: u64,
 }
 
 impl GarbageQueue {
   pub fn new(mut options: GarbageQueueInitParams) -> Self {
     if options.cap.absolute == 0 {
-      options.cap.absolute = i32::MAX;
+      options.cap.absolute = u64::MAX;
     }
     let rng = Rng::new(options.seed);
     GarbageQueue {
@@ -119,13 +119,13 @@ impl GarbageQueue {
     self.rng.next_float()
   }
 
-  fn column_width(&self) -> i32 {
-    (self.options.board_width as i32 - (self.options.garbage.hole_size as i32 - 1)).max(0)
+  fn column_width(&self) -> u64 {
+    (self.options.board_width - (self.options.garbage.hole_size - 1)).max(0)
   }
 
-  fn reroll_column(&mut self) -> i32 {
+  fn reroll_column(&mut self) -> u64 {
     let center_buffer = if self.options.messiness.center {
-      (self.options.board_width as f64 / 5.0).round() as i32
+      (self.options.board_width as f64 / 5.0).round() as u64
     } else {
       0
     };
@@ -133,21 +133,21 @@ impl GarbageQueue {
     let col = if self.options.messiness.nosame && self.last_column.is_some() {
       let lc = self.last_column.unwrap();
       let range = (self.column_width() - 1 - 2 * center_buffer).max(0);
-      let mut c = center_buffer + (self.rngex() * range as f64) as i32;
+      let mut c = center_buffer + (self.rngex() * range as f64) as u64;
       if c >= lc {
         c += 1;
       }
       c
     } else {
       let range = (self.column_width() - 2 * center_buffer).max(0);
-      center_buffer + (self.rngex() * range as f64) as i32
+      center_buffer + (self.rngex() * range as f64) as u64
     };
 
     self.last_column = Some(col);
     col
   }
 
-  pub fn size(&self) -> i32 {
+  pub fn size(&self) -> u64 {
     self.queue.iter().map(|g| g.amount).sum()
   }
 
@@ -159,7 +159,7 @@ impl GarbageQueue {
     }
 
     let cap = self.options.cap.absolute;
-    let mut total: i32 = self.queue.iter().map(|g| g.amount).sum();
+    let mut total: u64 = self.queue.iter().map(|g| g.amount).sum();
 
     while total > cap && !self.queue.is_empty() {
       let excess = total - cap;
@@ -174,7 +174,7 @@ impl GarbageQueue {
     }
   }
 
-  pub fn confirm(&mut self, cid: i32, gameid: i32, frame: i32) -> bool {
+  pub fn confirm(&mut self, cid: u64, gameid: u64, frame: u64) -> bool {
     if let Some(g) = self
       .queue
       .iter_mut()
@@ -190,15 +190,15 @@ impl GarbageQueue {
 
   pub fn cancel(
     &mut self,
-    amount: i32,
-    piece_count: i32,
+    amount: u64,
+    piece_count: u64,
     legacy_opener: bool,
-  ) -> (i32, Vec<IncomingGarbage>) {
+  ) -> (u64, Vec<IncomingGarbage>) {
     let mut send = amount;
-    let mut cancel = 0i32;
+    let mut cancel = 0u64;
 
     let opener_phase = self.options.opener_phase;
-    let current_size: i32 = self.queue.iter().map(|g| g.amount).sum();
+    let current_size: u64 = self.queue.iter().map(|g| g.amount).sum();
     if piece_count + 1 <= opener_phase - (if legacy_opener { 1 } else { 0 })
       && current_size >= self.sent
     {
@@ -206,11 +206,9 @@ impl GarbageQueue {
     }
 
     let mut cancelled: Vec<IncomingGarbage> = Vec::new();
-    let mut current_size = current_size;
 
     while (send > 0 || cancel > 0) && !self.queue.is_empty() {
       self.queue[0].amount -= 1;
-      current_size -= 1;
 
       let front_cid = self.queue[0].cid;
       if cancelled.is_empty()
@@ -242,7 +240,7 @@ impl GarbageQueue {
     (send, cancelled)
   }
 
-  pub fn tank(&mut self, frame: i32, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
+  pub fn tank(&mut self, frame: u64, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
     if self.queue.is_empty() {
       return vec![];
     }
@@ -256,7 +254,7 @@ impl GarbageQueue {
       self.has_changed_column = true;
     }
 
-    let lines = cap.min(self.options.cap.max as f64).floor() as i32;
+    let lines = cap.min(self.options.cap.max as f64).floor() as u64;
     let mut res: Vec<OutgoingGarbage> = Vec::new();
 
     let mut i = 0;
@@ -287,7 +285,7 @@ impl GarbageQueue {
         amount: 1,
         size: item.size,
         id: item.cid,
-        column: col as usize,
+        column: col,
       });
 
       self.has_changed_column = false;
@@ -306,11 +304,11 @@ impl GarbageQueue {
     res
   }
 
-  pub fn round(&mut self, amount: f64) -> i32 {
+  pub fn round(&mut self, amount: f64) -> u64 {
     match self.options.rounding {
-      RoundingMode::Down => amount.floor() as i32,
+      RoundingMode::Down => amount.floor() as u64,
       RoundingMode::Rng => {
-        let floored = amount.floor() as i32;
+        let floored = amount.floor() as u64;
         if amount.fract() == 0.0 {
           floored
         } else {

@@ -6,6 +6,7 @@ pub use data::{
 };
 
 use crate::engine::board::Tile;
+use crate::engine::queue::Mino;
 use crate::engine::utils::tetromino::types::Rotation;
 
 pub fn legal(blocks: &[(i32, i32)], board: &[Vec<Option<Tile>>]) -> bool {
@@ -38,8 +39,8 @@ pub struct KickResult {
 }
 
 pub fn perform_kick(
-  kick_table_name: &str,
-  piece: &str,
+  kick_table: KickTable,
+  piece: Mino,
   piece_location: [f64; 2],
   ao: [i32; 2],
   max_movement: bool,
@@ -48,11 +49,7 @@ pub fn perform_kick(
   end_rotation: Rotation,
   board: &[Vec<Option<Tile>>],
 ) -> Option<KickResult> {
-  let tables = &*KICK_TABLES;
-  let table = match tables.get(kick_table_name) {
-    Some(t) => t,
-    None => return None,
-  };
+  let table = kick_table.data();
 
   let floor_y = piece_location[1].floor() as i32;
   let base_x = piece_location[0] as i32 - ao[0];
@@ -73,7 +70,7 @@ pub fn perform_kick(
   }
 
   let kick_id = format!("{}{}", start_rotation, end_rotation);
-  let kicks = table.get_kicks(piece, &kick_id);
+  let kicks = table.get_kicks(piece.into(), &kick_id);
 
   let mut test_blocks = vec![(0i32, 0i32); blocks.len()];
 

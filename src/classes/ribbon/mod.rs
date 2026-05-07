@@ -395,14 +395,14 @@ impl Ribbon {
     format!("wss://{}/ribbon/{}", spool.host, spool.endpoint)
   }
 
-  pub fn open(&mut self) {
-    let mut ribbon = self.clone();
+  pub fn open(&self) {
+    let ribbon = self.clone();
     tokio::spawn(Box::pin(async move {
       ribbon.connect().await.ok();
     }));
   }
 
-  async fn connect(&mut self) -> Result<(), ApiError> {
+  async fn connect(&self) -> Result<(), ApiError> {
     let options = self.config.lock().await.options.clone();
 
     let spool = self.api.server.spool(options.spooling).await?;
@@ -518,7 +518,7 @@ impl Ribbon {
     Ok(())
   }
 
-  async fn pipe(&mut self, command: &str, data: serde_json::Value) {
+  async fn pipe(&self, command: &str, data: serde_json::Value) {
     self.emitter.lock().await.emit_raw(
       "client.ribbon.send",
       serde_json::json!({
@@ -554,7 +554,7 @@ impl Ribbon {
     }
   }
 
-  pub async fn emit<T: Event>(&mut self, event: T) {
+  pub async fn emit<T: Event>(&self, event: T) {
     if T::NAME.starts_with("client.") {
       self.emitter.lock().await.emit(event);
     } else {
@@ -567,7 +567,7 @@ impl Ribbon {
     }
   }
 
-  pub async fn emit_raw(&mut self, command: &str, data: serde_json::Value) {
+  pub async fn emit_raw(&self, command: &str, data: serde_json::Value) {
     if command.starts_with("client.") {
       self.emitter.lock().await.emit_raw(command, data);
     } else {
@@ -576,7 +576,7 @@ impl Ribbon {
   }
 
   fn process_message(
-    &mut self,
+    &self,
     msg: serde_json::Value,
   ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
     Box::pin(async move {
@@ -610,7 +610,7 @@ impl Ribbon {
     })
   }
 
-  async fn process_queue(&mut self) {
+  async fn process_queue(&self) {
     let mut state = self.state.lock().await;
     if state.recv_queue.is_empty() {
       return;
@@ -647,7 +647,7 @@ impl Ribbon {
     }
   }
 
-  async fn run_message(&mut self, packet: InPacket) {
+  async fn run_message(&self, packet: InPacket) {
     if let Some(id) = packet.id {
       self.state.lock().await.received_id = id;
     }
@@ -853,7 +853,7 @@ impl Ribbon {
       .emit_raw(packet.command.as_str(), packet.data.clone());
   }
 
-  async fn switch(&mut self, target: &str) {
+  async fn switch(&self, target: &str) {
     {
       let mut state = self.state.lock().await;
 
@@ -867,7 +867,7 @@ impl Ribbon {
   }
 
   fn __internal_reconnect(
-    &mut self,
+    &self,
   ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
     Box::pin(async move {
       self
@@ -885,7 +885,7 @@ impl Ribbon {
       let flags = self.state.lock().await.flags;
 
       if !flags.contains(Flags::DEAD) {
-        let mut ribbon = self.clone();
+        let ribbon = self.clone();
         let handle = tokio::spawn(Box::pin(async move {
           ribbon.connect().await.ok();
         }));
@@ -899,7 +899,7 @@ impl Ribbon {
     })
   }
 
-  async fn reconnect(&mut self) {
+  async fn reconnect(&self) {
     if self.reconnect_state.lock().await.reconnect_handle.is_some() {
       return;
     }
@@ -936,7 +936,7 @@ impl Ribbon {
       reconnect_state.reconnect_penalty as u64 + 5 + 100 * reconnect_state.reconnect_count as u64,
     );
 
-    let mut ribbon = self.clone();
+    let ribbon = self.clone();
 
     reconnect_state
       .reconnect_handle
@@ -949,7 +949,7 @@ impl Ribbon {
     reconnect_state.reconnect_count += 1;
   }
 
-  pub async fn close(&mut self, reason: &str) {
+  pub async fn close(&self, reason: &str) {
     let mut state = self.state.lock().await;
     if !reason.is_empty() {
       state.last_disconnect_reason = reason.to_string();
@@ -986,7 +986,7 @@ impl Ribbon {
 
   async fn listen(
     mut stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-    mut ribbon: Ribbon,
+    ribbon: Ribbon,
   ) {
     ribbon
       .log("Listening for messages...", LogLevel::Info, false)
@@ -1059,7 +1059,7 @@ impl Ribbon {
     }
   }
 
-  async fn pinger(mut ribbon: Ribbon) {
+  async fn pinger(ribbon: Ribbon) {
     loop {
       tokio::time::sleep(Duration::from_millis(2500)).await;
 
@@ -1143,12 +1143,12 @@ impl Ribbon {
     Hook::new(self.clone())
   }
 
-  pub async fn wrap<T: Event>(&mut self, event: impl Event) -> std::result::Result<T, WrapError> {
+  pub async fn wrap<T: Event>(&self, event: impl Event) -> std::result::Result<T, WrapError> {
     self.wrap_with_error::<T>(event, &["client.error"]).await
   }
 
   pub async fn wrap_with_error<T: Event>(
-    &mut self,
+    &self,
     event: impl Event,
     error_events: &[&str],
   ) -> std::result::Result<T, WrapError> {

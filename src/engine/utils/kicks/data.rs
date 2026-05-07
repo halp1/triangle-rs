@@ -1,10 +1,34 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use serde::{Deserialize, Serialize};
+
+use crate::{engine::utils::tetromino::data::MinoExt, types::game::SpinBonuses};
+
 type KickList = Vec<(i32, i32)>;
 type KickMap = HashMap<&'static str, KickList>;
 
-pub struct KickTable {
+//  "none" | "SRS" | "SRS+" | "SRS-X" | "TETRA-X" | "NRS" | "ARS" | "ASC"
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum KickTable {
+	None,
+	SRS,
+	SRSPlus,
+	SRSX,
+	TetraX,
+	NRS,
+	ARS,
+	ASC,
+}
+
+impl KickTable {
+	pub fn data(&self) -> KickTableData {
+		KICK_TABLES.get(self).cloned().unwrap()
+	}
+}
+
+pub struct KickTableData {
   pub kicks: KickMap,
   pub per_piece: HashMap<&'static str, KickMap>,
   pub additional_offsets: HashMap<&'static str, [(i32, i32); 4]>,
@@ -15,9 +39,9 @@ pub struct KickTable {
   pub center_column: Vec<(i32, i32)>,
 }
 
-impl KickTable {
-  pub fn get_kicks(&self, piece: &str, transition: &str) -> &[(i32, i32)] {
-    let piece_key = format!("{}_kicks", piece.to_lowercase());
+impl KickTableData {
+  pub fn get_kicks(&self, piece: MinoExt, transition: &str) -> &[(i32, i32)] {
+    let piece_key = format!("{}_kicks", piece.as_str());
     if let Some(per_piece_map) = self.per_piece.get(piece_key.as_str()) {
       if let Some(kicks) = per_piece_map.get(transition) {
         return kicks.as_slice();
@@ -60,13 +84,13 @@ fn color_map_standard() -> HashMap<&'static str, &'static str> {
   .collect()
 }
 
-pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::new(|| {
+pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::new(|| {
   let mut tables = HashMap::new();
 
   // ─── SRS ───────────────────────────────────────────────────────────────
   tables.insert(
-    "SRS",
-    KickTable {
+    KickTable::SRS,
+    KickTableData {
       kicks: km(&[
         ("01", &[(-1, 0), (-1, -1), (0, 2), (-1, 2)]),
         ("10", &[(1, 0), (1, 1), (0, -2), (1, -2)]),
@@ -222,8 +246,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
 
   // ─── SRS+ ──────────────────────────────────────────────────────────────
   tables.insert(
-    "SRS+",
-    KickTable {
+    KickTable::SRSPlus,
+    KickTableData {
       kicks: km(&[
         ("01", &[(-1, 0), (-1, -1), (0, 2), (-1, 2)]),
         ("10", &[(1, 0), (1, 1), (0, -2), (1, -2)]),
@@ -590,8 +614,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
     ),
   ]);
   tables.insert(
-    "SRS-X",
-    KickTable {
+    KickTable::SRSX,
+    KickTableData {
       kicks: {
         let base = km(&[
           ("01", &[(-1, 0), (-1, -1), (0, 2), (-1, 2)]),
@@ -848,8 +872,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
     ("31", &[(0, 1), (0, -1), (-1, 0), (1, 0)]),
   ]);
   tables.insert(
-    "TETRA-X",
-    KickTable {
+    KickTable::TetraX,
+    KickTableData {
       kicks: tetrax_general.clone(),
       per_piece: {
         let mut pp = HashMap::new();
@@ -932,8 +956,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
 
   // ─── NRS ───────────────────────────────────────────────────────────────
   tables.insert(
-    "NRS",
-    KickTable {
+    KickTable::NRS,
+    KickTableData {
       kicks: km(&[
         ("01", &[]),
         ("10", &[]),
@@ -989,8 +1013,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
 
   // ─── ARS ───────────────────────────────────────────────────────────────
   tables.insert(
-    "ARS",
-    KickTable {
+    KickTable::ARS,
+    KickTableData {
       kicks: km(&[
         ("01", &[(1, 0), (-1, 0)]),
         ("10", &[(1, 0), (-1, 0)]),
@@ -1291,8 +1315,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
     ("31", &[]),
   ]);
   tables.insert(
-    "ASC",
-    KickTable {
+    KickTable::ASC,
+    KickTableData {
       kicks: asc_kicks_ccw.clone(),
       per_piece: {
         let mut pp = HashMap::new();
@@ -1322,8 +1346,8 @@ pub static KICK_TABLES: LazyLock<HashMap<&'static str, KickTable>> = LazyLock::n
 
   // ─── none ──────────────────────────────────────────────────────────────
   tables.insert(
-    "none",
-    KickTable {
+    KickTable::None,
+    KickTableData {
       kicks: km(&[
         ("01", &[]),
         ("10", &[]),
@@ -1398,74 +1422,74 @@ pub struct SpinBonusRuleData {
   pub types_mini: &'static [&'static str],
 }
 
-pub static SPIN_BONUS_RULES: LazyLock<HashMap<&'static str, SpinBonusRuleData>> =
+pub static SPIN_BONUS_RULES: LazyLock<HashMap<SpinBonuses, SpinBonusRuleData>> =
   LazyLock::new(|| {
     let mut map = HashMap::new();
     map.insert(
-      "none",
+      SpinBonuses::None,
       SpinBonusRuleData {
         types: &[],
         types_mini: &[],
       },
     );
     map.insert(
-      "stupid",
+      SpinBonuses::Stupid,
       SpinBonusRuleData {
         types: ALL_STANDARD_TYPES,
         types_mini: &["t"],
       },
     );
     map.insert(
-      "all",
+      SpinBonuses::All,
       SpinBonusRuleData {
         types: ALL_STANDARD_TYPES,
         types_mini: &["t"],
       },
     );
     map.insert(
-      "all+",
+      SpinBonuses::AllPlus,
       SpinBonusRuleData {
         types: ALL_STANDARD_TYPES,
         types_mini: &["t"],
       },
     );
     map.insert(
-      "all-mini",
+      SpinBonuses::AllMini,
       SpinBonusRuleData {
         types: ALL_STANDARD_TYPES,
         types_mini: &["t"],
       },
     );
     map.insert(
-      "all-mini+",
+      SpinBonuses::AllMiniPlus,
       SpinBonusRuleData {
         types: ALL_STANDARD_TYPES,
         types_mini: &["t"],
       },
     );
     map.insert(
-      "mini-only",
+      SpinBonuses::MiniOnly,
       SpinBonusRuleData {
         types: ALL_STANDARD_TYPES,
         types_mini: &["t"],
       },
     );
     map.insert(
-      "handheld",
+      SpinBonuses::Handheld,
       SpinBonusRuleData {
         types: &["t", "s", "z", "l", "j"],
         types_mini: &["t"],
       },
     );
     map.insert(
-      "T-spins",
+      SpinBonuses::TSpins,
       SpinBonusRuleData {
         types: &["t"],
         types_mini: &["t"],
       },
     );
     map.insert(
-      "T-spins+",
+      SpinBonuses::TSpinsPlus,
       SpinBonusRuleData {
         types: &["t"],
         types_mini: &["t"],

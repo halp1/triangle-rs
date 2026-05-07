@@ -1,5 +1,8 @@
 use std::collections::HashMap;
+use std::panic;
 use std::sync::LazyLock;
+
+use crate::engine::queue::Mino;
 
 pub struct MatrixData {
   pub w: u32,
@@ -21,11 +24,72 @@ pub struct TetrominoEntry {
   pub xweight: Option<u32>,
 }
 
-pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLock::new(|| {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MinoExt {
+  I1,
+  I2,
+  I3,
+  L3,
+  I5,
+  Z,
+  L,
+  O,
+  S,
+  I,
+  J,
+  T,
+  OO,
+}
+
+impl MinoExt {
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			MinoExt::I1 => "i1",
+			MinoExt::I2 => "i2",
+			MinoExt::I3 => "i3",
+			MinoExt::L3 => "l3",
+			MinoExt::I5 => "i5",
+			MinoExt::Z => "z",
+			MinoExt::L => "l",
+			MinoExt::O => "o",
+			MinoExt::S => "s",
+			MinoExt::I => "i",
+			MinoExt::J => "j",
+			MinoExt::T => "t",
+			MinoExt::OO => "oo",
+		}
+	}
+
+	pub fn preview(&self) -> &'static PreviewData {
+		TETROMINOES
+			.get(self)
+			.expect("tetromino entry not found")
+			.preview
+			.as_ref()
+	}
+}
+
+impl From<Mino> for MinoExt {
+  fn from(value: Mino) -> Self {
+    match value {
+      Mino::Z => MinoExt::Z,
+      Mino::L => MinoExt::L,
+      Mino::O => MinoExt::O,
+      Mino::S => MinoExt::S,
+      Mino::I => MinoExt::I,
+      Mino::J => MinoExt::J,
+      Mino::T => MinoExt::T,
+			Mino::Garbage => panic!("garbage mino should not be converted to MinoExt"),
+			Mino::Bomb => panic!("bomb mino should not be converted to MinoExt"),
+    }
+  }
+}
+
+pub static TETROMINOES: LazyLock<HashMap<MinoExt, TetrominoEntry>> = LazyLock::new(|| {
   let mut map = HashMap::new();
 
   map.insert(
-    "i1",
+    MinoExt::I1,
     TetrominoEntry {
       matrix: MatrixData {
         w: 1,
@@ -49,7 +113,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "i2",
+    MinoExt::I2,
     TetrominoEntry {
       matrix: MatrixData {
         w: 2,
@@ -73,7 +137,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "i3",
+    MinoExt::I3,
     TetrominoEntry {
       matrix: MatrixData {
         w: 3,
@@ -97,7 +161,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "l3",
+    MinoExt::L3,
     TetrominoEntry {
       matrix: MatrixData {
         w: 2,
@@ -121,7 +185,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "i5",
+    MinoExt::I5,
     TetrominoEntry {
       matrix: MatrixData {
         w: 5,
@@ -145,7 +209,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "z",
+    MinoExt::Z,
     TetrominoEntry {
       matrix: MatrixData {
         w: 3,
@@ -169,7 +233,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "l",
+    MinoExt::L,
     TetrominoEntry {
       matrix: MatrixData {
         w: 3,
@@ -193,7 +257,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "o",
+    MinoExt::O,
     TetrominoEntry {
       matrix: MatrixData {
         w: 2,
@@ -217,7 +281,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "s",
+    MinoExt::S,
     TetrominoEntry {
       matrix: MatrixData {
         w: 3,
@@ -241,7 +305,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "i",
+    MinoExt::I,
     TetrominoEntry {
       matrix: MatrixData {
         w: 4,
@@ -265,7 +329,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "j",
+    MinoExt::J,
     TetrominoEntry {
       matrix: MatrixData {
         w: 3,
@@ -289,7 +353,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "t",
+    MinoExt::T,
     TetrominoEntry {
       matrix: MatrixData {
         w: 3,
@@ -313,7 +377,7 @@ pub static TETROMINOES: LazyLock<HashMap<&'static str, TetrominoEntry>> = LazyLo
   );
 
   map.insert(
-    "oo",
+    MinoExt::OO,
     TetrominoEntry {
       matrix: MatrixData {
         w: 4,
