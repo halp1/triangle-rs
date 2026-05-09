@@ -1,7 +1,7 @@
 pub mod bag;
 pub mod types;
 
-use bag::{Bag, BagSnapshot, BagType, make_bag};
+use bag::{Bag, BagSnapshot, BagType};
 use serde::{Deserialize, Serialize};
 pub use types::Mino;
 
@@ -24,7 +24,7 @@ pub struct Queue {
   pub seed: i64,
   pub kind: BagType,
   pub bag: Box<dyn Bag>,
-  pub min_length: usize,
+  min_length: usize,
   pieces: Vec<Mino>,
   repopulate_listener: Option<fn(Vec<Mino>)>,
 }
@@ -45,7 +45,7 @@ impl Queue {
     let mut q = Queue {
       seed: params.seed,
       kind: params.kind,
-      bag: make_bag(params.kind, params.seed),
+      bag: params.kind.bag(params.seed),
       min_length: params.min_length,
       pieces: Vec::new(),
       repopulate_listener: None,
@@ -55,7 +55,7 @@ impl Queue {
   }
 
   pub fn reset(&mut self) {
-    self.bag = make_bag(self.kind, self.seed);
+    self.bag = self.kind.bag(self.seed);
     self.pieces.clear();
     self.repopulate();
   }
@@ -66,6 +66,10 @@ impl Queue {
 
   pub fn on_repopulate(&mut self, listener: fn(Vec<Mino>)) {
     self.repopulate_listener = Some(listener);
+  }
+
+  pub fn min_length(&self) -> usize {
+    self.min_length
   }
 
   pub fn set_min_length(&mut self, min_length: usize) {

@@ -10,7 +10,7 @@ pub struct IgeHandlerSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GarbageRecord {
   pub iid: u64,
-  pub amount: u64,
+  pub amount: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ impl IgeHandler {
     }
   }
 
-  pub fn send(&mut self, target: u64, amount: u64) -> u64 {
+  pub fn send(&mut self, target: u64, amount: u32) -> u64 {
     if amount == 0 {
       return 0;
     }
@@ -68,7 +68,7 @@ impl IgeHandler {
     iid
   }
 
-  pub fn receive(&mut self, gameid: u64, ackiid: u64, iid: u64, amount: u64) -> u64 {
+  pub fn receive(&mut self, gameid: u64, ackiid: u64, iid: u64, amount: u32) -> u32 {
     let player = self.players.entry(gameid).or_insert_with(|| PlayerData {
       incoming: 0,
       outgoing: Vec::new(),
@@ -76,7 +76,7 @@ impl IgeHandler {
 
     let incoming_iid = iid.max(player.incoming);
     let mut new_outgoing = Vec::new();
-    let mut running_amount = amount;
+    let mut running_amount: u32 = amount;
 
     for mut item in player.outgoing.clone() {
       if item.iid <= ackiid {

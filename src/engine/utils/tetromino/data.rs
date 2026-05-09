@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 
 use crate::engine::queue::Mino;
 
+#[derive(Debug, Clone)]
 pub struct MatrixData {
   pub w: u32,
   pub h: u32,
@@ -12,6 +13,7 @@ pub struct MatrixData {
   pub data: [Vec<(i32, i32, u8)>; 4],
 }
 
+#[derive(Debug, Clone)]
 pub struct PreviewData {
   pub w: u32,
   pub h: u32,
@@ -39,34 +41,57 @@ pub enum MinoExt {
   J,
   T,
   OO,
+	G,
+	D,
+	GB,
+	GBD
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MinoColor {
+  Z,
+  L,
+  O,
+  S,
+  I,
+  J,
+  T,
+  G,
+  D,
+  GB,
+  GBD,
 }
 
 impl MinoExt {
-	pub fn as_str(&self) -> &'static str {
-		match self {
-			MinoExt::I1 => "i1",
-			MinoExt::I2 => "i2",
-			MinoExt::I3 => "i3",
-			MinoExt::L3 => "l3",
-			MinoExt::I5 => "i5",
-			MinoExt::Z => "z",
-			MinoExt::L => "l",
-			MinoExt::O => "o",
-			MinoExt::S => "s",
-			MinoExt::I => "i",
-			MinoExt::J => "j",
-			MinoExt::T => "t",
-			MinoExt::OO => "oo",
-		}
-	}
+  pub fn as_str(&self) -> &'static str {
+		use MinoExt::*;
+    match self {
+      I1 => "i1",
+      I2 => "i2",
+      I3 => "i3",
+      L3 => "l3",
+      I5 => "i5",
+      Z => "z",
+      L => "l",
+      O => "o",
+      S => "s",
+      I => "i",
+      J => "j",
+      T => "t",
+			G => "g",
+      OO => "oo",
+			D => "d",
+			GB => "gb",
+			GBD => "gbd",
+    }
+  }
 
-	pub fn preview(&self) -> &'static PreviewData {
-		TETROMINOES
-			.get(self)
-			.expect("tetromino entry not found")
-			.preview
-			.as_ref()
-	}
+  pub fn preview(&self) -> &'static PreviewData {
+    &TETROMINOES
+      .get(self)
+      .expect("tetromino entry not found")
+      .preview
+  }
 }
 
 impl From<Mino> for MinoExt {
@@ -79,8 +104,8 @@ impl From<Mino> for MinoExt {
       Mino::I => MinoExt::I,
       Mino::J => MinoExt::J,
       Mino::T => MinoExt::T,
-			Mino::Garbage => panic!("garbage mino should not be converted to MinoExt"),
-			Mino::Bomb => panic!("bomb mino should not be converted to MinoExt"),
+      Mino::Garbage => panic!("garbage mino should not be converted to MinoExt"),
+      Mino::Bomb => panic!("bomb mino should not be converted to MinoExt"),
     }
   }
 }

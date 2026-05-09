@@ -30,7 +30,7 @@ use bitflags::bitflags;
 use colored::Colorize;
 use tokio::{
   net::TcpStream,
-  sync::{Mutex, broadcast},
+  sync::Mutex,
   time::{Instant, sleep},
 };
 
@@ -217,7 +217,7 @@ pub struct Ribbon {
   state: Arc<Mutex<RibbonState>>,
   reconnect_state: Arc<Mutex<RibbonReconnectState>>,
   pub api: Arc<Api>,
-  pub emitter: Arc<Mutex<EventEmitter>>,
+  pub emitter: EventEmitter,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -237,11 +237,7 @@ pub struct OptionalParams {
   pub transport: Option<Transport>,
 }
 
-pub enum WrapError {
-  ServerError,
-  ParseError,
-  Error(String, serde_json::Value),
-}
+pub use crate::utils::events::WrapError;
 
 impl Ribbon {
   pub async fn new(params: Params) -> Result<Self, ApiError> {
@@ -297,7 +293,7 @@ impl Ribbon {
         reconnect_penalty: 0,
       })),
       api: Arc::new(api),
-      emitter: Arc::new(Mutex::new(EventEmitter::new())),
+      emitter: EventEmitter::new(),
     };
 
     let ribbon_clone = ribbon.clone();
@@ -310,17 +306,17 @@ impl Ribbon {
 
   async fn log(&self, msg: &str, level: LogLevel, force: bool) {
     if level == LogLevel::Error {
-      self.emitter.lock().await.emit_raw(
+      self.emitter.emit_raw(
         "client.ribbon.error",
         serde_json::from_str(msg).unwrap_or(serde_json::json!({"error": msg})),
       );
     } else if level == LogLevel::Warning {
-      self.emitter.lock().await.emit_raw(
+      self.emitter.emit_raw(
         "client.ribbon.warn",
         serde_json::from_str(msg).unwrap_or(serde_json::json!({"warn": msg})),
       );
     } else {
-      self.emitter.lock().await.emit_raw(
+      self.emitter.emit_raw(
         "client.ribbon.log",
         serde_json::from_str(msg).unwrap_or(serde_json::json!({"log": msg})),
       );
@@ -519,7 +515,7 @@ impl Ribbon {
   }
 
   async fn pipe(&self, command: &str, data: serde_json::Value) {
-    self.emitter.lock().await.emit_raw(
+    self.emitter.emit_raw(
       "client.ribbon.send",
       serde_json::json!({
         "command": command,
@@ -556,7 +552,7 @@ impl Ribbon {
 
   pub async fn emit<T: Event>(&self, event: T) {
     if T::NAME.starts_with("client.") {
-      self.emitter.lock().await.emit(event);
+      self.emitter.emit(event);
     } else {
       self
         .pipe(
@@ -569,7 +565,7 @@ impl Ribbon {
 
   pub async fn emit_raw(&self, command: &str, data: serde_json::Value) {
     if command.starts_with("client.") {
-      self.emitter.lock().await.emit_raw(command, data);
+      self.emitter.emit_raw(command, data);
     } else {
       self.pipe(command, data).await;
     }
@@ -653,7 +649,7 @@ impl Ribbon {
     }
 
     if packet.command != "ping" && packet.command != "packets" {
-      self.emitter.lock().await.emit_raw(
+      self.emitter.emit_raw(
         "client.ribbon.receive",
         serde_json::json!({
           "command": packet.command,
@@ -848,8 +844,6 @@ impl Ribbon {
 
     self
       .emitter
-      .lock()
-      .await
       .emit_raw(packet.command.as_str(), packet.data.clone());
   }
 
@@ -955,7 +949,7 @@ impl Ribbon {
       state.last_disconnect_reason = reason.to_string();
     }
 
-    self.emitter.lock().await.emit(send::client::Close {
+    self.emitter.emit(send::client::Close {
       reason: state.last_disconnect_reason.clone(),
     });
 
@@ -1117,30 +1111,25 @@ impl Ribbon {
   }
 
   pub async fn wait<T: Event>(&self) -> Option<T> {
-    let emitter = self.emitter.lock().await.clone();
-    emitter.once::<T>().await
+    self.emitter.wait::<T>().await
   }
 
   pub async fn on<T: Event>(
     &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
-    let emitter = self.emitter.clone();
-    emitter.lock().await.on(callback)
+    self.emitter.on(callback)
   }
 
   pub async fn once<T: Event>(
     &self,
     callback: impl Fn(T) + Send + Sync + 'static,
   ) -> tokio::task::JoinHandle<()> {
-    let emitter = self.emitter.lock().await.clone();
-    tokio::spawn(Box::pin(async move {
-      emitter.once::<T>().await.map(callback);
-    }))
+    self.emitter.once_fn(callback)
   }
 
   pub fn hook(&self) -> Hook {
-    Hook::new(self.clone())
+    Hook::new(self.emitter.clone())
   }
 
   pub async fn wrap<T: Event>(&self, event: impl Event) -> std::result::Result<T, WrapError> {
@@ -1152,28 +1141,16 @@ impl Ribbon {
     event: impl Event,
     error_events: &[&str],
   ) -> std::result::Result<T, WrapError> {
-    self.emit(event).await;
-
-    let emitter: EventEmitter = self.emitter.lock().await.clone();
-
-    let mut rx = emitter.subscribe();
-
-    loop {
-      match rx.recv().await {
-        Ok((cmd, data)) if error_events.contains(&cmd.as_str()) => {
-          return Err(WrapError::Error(cmd, data));
-        }
-        Ok((cmd, data)) if cmd == T::NAME => {
-          if let Ok(parsed) = serde_json::from_value::<T>(data) {
-            return Ok(parsed);
-          } else {
-            return Err(WrapError::ParseError);
-          }
-        }
-        Ok(_) => {}
-        Err(broadcast::error::RecvError::Closed) => return Err(WrapError::ServerError),
-        Err(broadcast::error::RecvError::Lagged(_)) => {}
-      }
-    }
+    let cmd = event.name().to_string();
+    let data = serde_json::to_value(&event).unwrap_or(serde_json::json!({}));
+    let ribbon = self.clone();
+    self
+      .emitter
+      .wrap_with_error::<T>(async move { ribbon.emit_raw(&cmd, data).await }, error_events)
+      .await
   }
+
+	pub async fn destroy(&self) {
+		
+	}
 }

@@ -36,7 +36,7 @@ pub struct GarbageCalcConfig {
 
 #[derive(Debug, Clone)]
 pub struct GarbageCalcInput {
-  pub lines: i32,
+  pub lines: u32,
   pub spin: Spin,
   pub piece: Mino,
   pub b2b: i32,
@@ -130,7 +130,7 @@ pub fn garbage_calc_v2(input: &GarbageCalcInput, config: &GarbageCalcConfig) -> 
         }
       }
       ref table => {
-        let table_data: &[f64] = table.data().as_slice();
+        let table_data = table.data();
         let idx = ((combo - 1) as usize).min(table_data.len().saturating_sub(1));
         garbage += table_data[idx];
       }

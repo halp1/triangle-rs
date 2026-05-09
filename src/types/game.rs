@@ -157,12 +157,12 @@ pub enum ComboTable {
 }
 
 impl ComboTable {
-	pub fn data(&self) -> Vec<f64> {
+	pub fn data(&self) -> &'static [f64] {
 		match self {
-			ComboTable::None => vec![0.0],
+			ComboTable::None => &[0.0],
 			ComboTable::Multiplier => panic!("Multiplier combo table does not have predefined data"),
-			ComboTable::ClassicGuideline => vec![0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
-			ComboTable::ModernGuideline => vec![0.0, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
+			ComboTable::ClassicGuideline => &[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+			ComboTable::ModernGuideline => &[0.0, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
 		}
 	}
 }
@@ -581,7 +581,7 @@ impl TryFrom<u8> for TargetingStrategy {
 // | "redo"
 // | "retry"
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Key {
   #[serde(rename = "moveLeft")]
   MoveLeft,
@@ -605,6 +605,24 @@ pub enum Key {
   Redo,
   #[serde(rename = "retry")]
   Retry,
+}
+
+impl Key {
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Key::MoveLeft => "moveLeft",
+      Key::MoveRight => "moveRight",
+      Key::RotateCW => "rotateCW",
+      Key::RotateCCW => "rotateCCW",
+      Key::Rotate180 => "rotate180",
+      Key::SoftDrop => "softDrop",
+      Key::HardDrop => "hardDrop",
+      Key::Hold => "hold",
+      Key::Undo => "undo",
+      Key::Redo => "redo",
+      Key::Retry => "retry",
+    }
+  }
 }
 
 pub mod replay {

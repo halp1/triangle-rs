@@ -18,6 +18,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a3a1fd6f75306b68087b831f025c712524bcb19aad54e557b1129cfa0a2b207"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -756,6 +765,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "msgpackr"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1376,6 +1393,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1560,6 +1587,7 @@ dependencies = [
 name = "triangle-rs"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "base64",
  "bitflags",
  "bytes",
@@ -1567,6 +1595,7 @@ dependencies = [
  "colored",
  "dotenvy",
  "futures-util",
+ "msgpackr",
  "native-tls",
  "rand 0.8.5",
  "reqwest",
@@ -1574,6 +1603,7 @@ dependencies = [
  "rmpv",
  "serde",
  "serde_json",
+ "terminal_size",
  "thiserror",
  "tokio",
  "tokio-native-tls",

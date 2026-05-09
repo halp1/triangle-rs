@@ -2,59 +2,53 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::utils::events::{AsyncCallback, Event};
+use crate::utils::{
+  EventEmitter,
+  events::{AsyncCallback, Event},
+};
 
-use super::{Ribbon, WrapError};
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Hook {
-  ribbon: Ribbon,
+  emitter: EventEmitter,
   handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
 }
 
+impl std::fmt::Debug for Hook {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("Hook")
+      .field("handles", &self.handles)
+      .finish()
+  }
+}
+
 impl Hook {
-  pub fn new(ribbon: Ribbon) -> Self {
+  pub fn new(emitter: EventEmitter) -> Self {
     Self {
-      ribbon,
+      emitter,
       handles: Arc::new(Mutex::new(Vec::new())),
     }
   }
 
   pub async fn on<T: Event>(
-    &mut self,
+    &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
-  ) -> &mut Self {
-    let handle = self.ribbon.on(callback).await;
+  ) -> &Self {
+    let handle = self.emitter.on(callback);
     self.handles.lock().await.push(handle);
     self
   }
 
-  pub async fn once<T: Event>(
-    &mut self,
-    callback: impl Fn(T) + Send + Sync + 'static,
-  ) -> &mut Self {
-    let handle = self.ribbon.once(callback).await;
+  pub async fn once<T: Event>(&self, callback: impl Fn(T) + Send + 'static) -> &Self {
+    let handle = self.emitter.once_fn(callback);
     self.handles.lock().await.push(handle);
     self
   }
 
   pub async fn wait<T: Event>(&self) -> Option<T> {
-    self.ribbon.wait::<T>().await
+    self.emitter.wait::<T>().await
   }
 
-  pub async fn wrap<T: Event>(&mut self, event: impl Event) -> std::result::Result<T, WrapError> {
-    self.ribbon.wrap::<T>(event).await
-  }
-
-  pub async fn wrap_with_error<T: Event>(
-    &mut self,
-    event: impl Event,
-    error_events: &[&str],
-  ) -> std::result::Result<T, WrapError> {
-    self.ribbon.wrap_with_error::<T>(event, error_events).await
-  }
-
-  pub async fn destroy(&mut self) {
+  pub async fn destroy(&self) {
     for handle in self.handles.lock().await.drain(..) {
       handle.abort();
     }
@@ -63,11 +57,19 @@ impl Hook {
 
 impl Drop for Hook {
   fn drop(&mut self) {
-		let handles = self.handles.clone();
-    tokio::spawn(async move {
-			for handle in handles.lock().await.drain(..) {
-				handle.abort();
-			}
-    });
+    let handles = self.handles.clone();
+    if let Ok(rt) = tokio::runtime::Handle::try_current() {
+      rt.spawn(async move {
+        for handle in handles.lock().await.drain(..) {
+          handle.abort();
+        }
+      });
+    } else {
+      if let Ok(mut guard) = self.handles.try_lock() {
+        for handle in guard.drain(..) {
+          handle.abort();
+        }
+      }
+    }
   }
 }

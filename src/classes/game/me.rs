@@ -14,9 +14,10 @@ use crate::{
     game::{
       ReadyPlayer, TargetingStrategy, ige,
       replay::{self, Frame, FrameData, Keypress},
-      tick,
+      tick::{self, Out},
     },
   },
+  utils::Logger,
 };
 
 pub const MAX_IGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -51,6 +52,8 @@ pub struct MeState {
 pub struct Me {
   ribbon: Ribbon,
   hook: Hook,
+  logger: Logger,
+
   me: ClientUser,
 
   start_hook: Arc<Mutex<Option<oneshot::Sender<()>>>>,
@@ -72,11 +75,19 @@ impl Me {
 
     let s = Self {
       ribbon: ribbon.clone(),
-      hook: Hook::new(ribbon),
+      hook: ribbon.hook(),
+			logger: Logger::new("triangle-rs"),
       me,
       handles: Arc::new(Mutex::new(Vec::new())),
       start_hook: Arc::new(Mutex::new(Some(start_hook_tx))),
-      tick: tick::Ticker(Arc::new(Mutex::new(Box::new(|| {})))),
+      tick: tick::Ticker(Arc::new(Mutex::new(Box::new(|_| {
+        Box::pin(async {
+          Out {
+            keys: vec![],
+            run_after: vec![],
+          }
+        })
+      })))),
 
       state: Arc::new(Mutex::new(MeState {
         frame_queue: Vec::new(),
@@ -90,7 +101,8 @@ impl Me {
         is_practice: false,
         over: false,
 
-        engine: Game::create_engine(self_player.options, self_player.gameid, players.clone()),
+        // engine: Game::create_engine(self_player.options, self_player.gameid, players.clone()),
+        engine: unimplemented!(), // TODO: implement
         gameid: self_player.gameid,
         options: self_player.options,
         server_targets: Vec::new(),
@@ -113,7 +125,8 @@ impl Me {
     let mut state = self.state.lock().await;
 
     state.over = true;
-    state.engine.events.clear();
+    // state.engine.events.clear();
+		// TODO: clear engine events
 
     let mut handles = self.handles.lock().await;
     for handle in handles.drain(..) {
@@ -230,13 +243,13 @@ impl Me {
   /// Returns (continue, delay until next tick. 0 = run instantly)
   async fn tick_game(&mut self) -> (bool, Duration) {
     let (snapshot, engine, gameid) = {
-      let mut state = self.state.lock().await;
+      let state = self.state.lock().await;
 
       if state.over {
         return (false, Duration::from_secs(0));
       }
 
-      let snapshot = &state.engine.snapshot();
+      let snapshot = state.engine.snapshot();
 
       (snapshot, state.engine.clone(), state.gameid)
     };
@@ -245,7 +258,7 @@ impl Me {
 
     {
       let mut state = self.state.lock().await;
-      state.engine.from_snapshot(snapshot);
+      state.engine.from_snapshot(&snapshot);
 
       state.key_queue.extend(res.keys);
 
@@ -261,11 +274,13 @@ impl Me {
     let (gameid, frame, start_time) = {
       let mut state = self.state.lock().await;
 
-      let keys = Vec::new();
+      let mut keys = Vec::new();
+
+			let frame = state.engine.frame;
 
       state.key_queue.retain(|key| {
-        if key.frame == state.engine.frame {
-          keys.push(key);
+        if key.frame == frame {
+          keys.push(key.clone());
           return false;
         }
         true
@@ -289,20 +304,17 @@ impl Me {
         })
         .collect::<Vec<_>>();
 
-      state.engine.tick(
-        state
-          .incoming_garbage
-          .drain(..)
-          .into_iter()
-          .map(|(frame, ige)| Frame {
-            frame,
-            data: FrameData::IGE(ige),
-          })
-          .collect::<Vec<_>>()
-          .iter()
-          .chain(key_frames.iter())
-          .collect::<Vec<_>>(),
-      );
+      let mut all_frames: Vec<Frame> = state
+        .incoming_garbage
+        .drain(..)
+        .map(|(frame, ige)| Frame {
+          frame,
+          data: FrameData::IGE(ige),
+        })
+        .collect();
+      all_frames.extend(key_frames.iter().cloned());
+
+      state.engine.tick(&all_frames);
 
       state.frame_queue.extend(key_frames);
 
@@ -310,12 +322,13 @@ impl Me {
     };
 
     if frame != 0 && frame % FRAMES_PER_MESSAGE == 0 {
+			let frames = self.flush_frames().await;
       self
         .ribbon
         .emit(send::game::Replay {
           gameid,
           provisioned: frame,
-          frames: self.flush_frames().await,
+          frames,
         })
         .await;
     }
@@ -341,7 +354,7 @@ impl Me {
     (true, target.max(Duration::from_micros(50))) // minimum delay of 50µs to prevent runaway loop in case of severe lag
   }
 
-  async fn flush_iges(&self) {
+  async fn flush_iges(&mut self) {
     let iges = {
       let mut state = self.state.lock().await;
       if state.force_pause_iges || (state.pause_iges && !state.key_queue.is_empty()) {
@@ -361,7 +374,7 @@ impl Me {
     }
   }
 
-  async fn __internal_handle_ige(&self, ige: ige::IGE) {
+  async fn __internal_handle_ige(&mut self, ige: ige::IGE) {
     let mut state = self.state.lock().await;
     let frame = Frame {
       frame: state.engine.frame,
@@ -416,7 +429,7 @@ impl Me {
     Ok(())
   }
 
-  pub async fn set_pause_iges(&self, pause: bool) {
+  pub async fn set_pause_iges(&mut self, pause: bool) {
     {
       let mut state = self.state.lock().await;
       state.pause_iges = pause;
@@ -425,7 +438,7 @@ impl Me {
     self.flush_iges().await;
   }
 
-  pub async fn set_force_pause_iges(&self, force_pause: bool) {
+  pub async fn set_force_pause_iges(&mut self, force_pause: bool) {
     {
       let mut state = self.state.lock().await;
       state.force_pause_iges = force_pause;

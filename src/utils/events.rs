@@ -1,6 +1,7 @@
 use std::future::{Future, Ready, ready};
 use std::sync::Arc;
 
+use arc_swap::ArcSwapOption;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
@@ -8,6 +9,16 @@ const BROADCAST_CAPACITY: usize = 1024;
 
 pub trait Event: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + 'static {
   const NAME: &'static str;
+  fn name(&self) -> &'static str {
+    Self::NAME
+  }
+}
+
+#[derive(Debug)]
+pub enum WrapError {
+  ServerError,
+  ParseError,
+  Error(String, Value),
 }
 
 pub trait AsyncCallback<T>: Clone + Send + 'static {
@@ -46,24 +57,35 @@ where
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EventEmitter {
-  tx: Arc<broadcast::Sender<(String, Value)>>,
+  tx: Arc<ArcSwapOption<broadcast::Sender<(String, Value)>>>,
+}
+
+impl Clone for EventEmitter {
+  fn clone(&self) -> Self {
+    Self {
+      tx: self.tx.clone(),
+    }
+  }
 }
 
 impl EventEmitter {
   pub fn new() -> Self {
     let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
-    Self { tx: Arc::new(tx) }
+    Self {
+      tx: Arc::new(ArcSwapOption::new(Some(Arc::new(tx)))),
+    }
   }
 
-  /// Subscribe to all events. Returns a receiver that yields `(command, data)`.
-  pub fn subscribe(&self) -> broadcast::Receiver<(String, Value)> {
-    self.tx.subscribe()
+  pub fn subscribe(&self) -> Option<broadcast::Receiver<(String, Value)>> {
+    self.tx.load().as_deref().map(|tx| tx.subscribe())
   }
 
   pub fn emit_raw(&self, command: &str, data: Value) {
-    let _ = self.tx.send((command.to_string(), data));
+    if let Some(tx) = self.tx.load().as_deref() {
+      let _ = tx.send((command.to_string(), data));
+    }
   }
 
   pub fn emit<T: Event>(&self, event: T) {
@@ -71,13 +93,13 @@ impl EventEmitter {
     self.emit_raw(T::NAME, data);
   }
 
-  /// Listen for a specific event type. The callback will be called with the parsed event data.
-
   pub fn on<T: Event>(
     &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
-    let mut rx = self.tx.subscribe();
+    let Some(mut rx) = self.subscribe() else {
+      return tokio::spawn(async {});
+    };
     tokio::spawn(async move {
       loop {
         match rx.recv().await {
@@ -96,7 +118,7 @@ impl EventEmitter {
 
   pub async fn once_raw(&self, command: &str) -> Option<Value> {
     let command = command.to_string();
-    let mut rx = self.tx.subscribe();
+    let mut rx = self.subscribe()?;
     loop {
       match rx.recv().await {
         Ok((cmd, data)) if cmd == command => return Some(data),
@@ -107,8 +129,66 @@ impl EventEmitter {
     }
   }
 
-  pub async fn once<T: Event>(&self) -> Option<T> {
+  pub fn once_fn<T: Event>(
+    &self,
+    callback: impl Fn(T) + Send + 'static,
+  ) -> tokio::task::JoinHandle<()> {
+    let emitter = self.clone();
+    tokio::spawn(async move {
+      emitter.wait::<T>().await.map(callback);
+    })
+  }
+
+  pub async fn wait<T: Event>(&self) -> Option<T> {
     let data = self.once_raw(T::NAME).await?;
     serde_json::from_value(data).ok()
+  }
+
+  pub async fn wrap_with_error<T: Event>(
+    &self,
+    emit: impl Future<Output = ()> + Send,
+    error_events: &[&str],
+  ) -> Result<T, WrapError> {
+    let Some(mut rx) = self.subscribe() else {
+      return Err(WrapError::ServerError);
+    };
+    emit.await;
+    loop {
+      match rx.recv().await {
+        Ok((cmd, data)) if error_events.contains(&cmd.as_str()) => {
+          return Err(WrapError::Error(cmd, data));
+        }
+        Ok((cmd, data)) if cmd == T::NAME => {
+          if let Ok(parsed) = serde_json::from_value::<T>(data) {
+            return Ok(parsed);
+          } else {
+            return Err(WrapError::ParseError);
+          }
+        }
+        Ok(_) => {}
+        Err(broadcast::error::RecvError::Closed) => return Err(WrapError::ServerError),
+        Err(broadcast::error::RecvError::Lagged(_)) => {}
+      }
+    }
+  }
+
+  pub async fn wrap<T: Event>(
+    &self,
+    emit: impl Future<Output = ()> + Send,
+  ) -> Result<T, WrapError> {
+    self.wrap_with_error::<T>(emit, &["client.error"]).await
+  }
+
+  pub fn hook(&self) -> crate::classes::ribbon::Hook {
+    crate::classes::ribbon::Hook::new(self.clone())
+  }
+
+  pub fn destroy(&self) {
+    self.tx.store(None);
+  }
+
+  pub fn clear(&self) {
+    let (new_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+    self.tx.store(Some(Arc::new(new_tx)));
   }
 }

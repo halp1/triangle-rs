@@ -449,8 +449,8 @@ pub enum BagType {
 }
 
 impl BagType {
-  pub fn bag(bag_type: BagType, seed: i64) -> Box<dyn Bag> {
-    match bag_type {
+  pub fn bag(&self, seed: i64) -> Box<dyn Bag> {
+    match self {
       BagType::Bag7 => Box::new(Bag7::new(seed)),
       BagType::Bag14 => Box::new(Bag14::new(seed)),
       BagType::Classic => Box::new(Classic::new(seed)),

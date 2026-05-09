@@ -25,3 +25,9 @@ pub struct Game {
 	hook: Hook,
 	
 }
+
+impl Game {
+	pub async fn destroy(&self) {
+		// TODO: implement
+	}
+}

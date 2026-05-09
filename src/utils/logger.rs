@@ -1,3 +1,8 @@
+use std::io::Write;
+
+use colored::Colorize;
+use terminal_size::{Width, terminal_size};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
   Info,
@@ -25,72 +30,91 @@ impl Logger {
     &self.name
   }
 
-  fn prefix(&self) -> String {
-    format!("[{}]", self.name)
+  fn cols() -> usize {
+    terminal_size().map(|(Width(w), _)| w as usize).unwrap_or(80)
   }
 
-  fn render_message(messages: &[String]) -> String {
-    messages.join(" ")
+  fn print_line(&mut self, colored_prefix: String, message: &str) {
+    if self.last_progress {
+      println!();
+    }
+    println!("{} {}", colored_prefix, message);
+    self.last_progress = false;
   }
 
-  pub fn format<T>(&mut self, level: LogLevel, messages: &[T]) -> String
-  where
-    T: ToString,
-  {
-    let body = Self::render_message(&messages.iter().map(ToString::to_string).collect::<Vec<_>>());
+  pub fn info(&mut self, message: impl Into<String>) {
+    let prefix = format!("[{}]", self.name).blue().to_string();
+    self.print_line(prefix, &message.into());
+  }
 
-    match level {
-      LogLevel::Progress => {
-        self.last_progress = true;
-        format!("{} {}", self.prefix(), body)
-      }
-      _ => {
-        self.last_progress = false;
-        format!("{} {}", self.prefix(), body)
+  pub fn warn(&mut self, message: impl Into<String>) {
+    let prefix = format!("[{}]", self.name).yellow().to_string();
+    self.print_line(prefix, &message.into());
+  }
+
+  pub fn error(&mut self, message: impl Into<String>) {
+    let prefix = format!("[{}]", self.name).red().to_string();
+    self.print_line(prefix, &message.into());
+  }
+
+  pub fn success(&mut self, message: impl Into<String>) {
+    let prefix = format!("[{}]", self.name).bright_green().to_string();
+    self.print_line(prefix, &message.into());
+  }
+
+  pub fn progress(&mut self, message: impl Into<String>, progress: f64) {
+    let cols = Self::cols();
+    let name_plain = format!("[{}]", self.name);
+    let prefix_plain = format!("{} {}", name_plain, message.into());
+
+    let mut content: Vec<char> = prefix_plain.chars().collect();
+    if content.len() >= cols {
+      content.truncate(cols);
+    } else {
+      content.resize(cols, ' ');
+    }
+
+    let p = progress.clamp(0.0, 1.0);
+    let filled_length = ((p * cols as f64).round() as usize).min(cols);
+
+    let name_len = name_plain.chars().count();
+    let name_filled_overlap = filled_length.min(name_len);
+    let name_empty_overlap = name_len.saturating_sub(name_filled_overlap);
+
+    let filled_chars = &content[..filled_length];
+    let empty_chars = &content[filled_length..];
+
+    let mut output = String::new();
+
+    if filled_length > 0 {
+      if name_filled_overlap > 0 {
+        let name_part: String = filled_chars[..name_filled_overlap].iter().collect();
+        let rest: String = filled_chars[name_filled_overlap..].iter().collect();
+        output.push_str(&name_part.magenta().on_white().to_string());
+        if !rest.is_empty() {
+          output.push_str(&rest.on_white().to_string());
+        }
+      } else {
+        let filled: String = filled_chars.iter().collect();
+        output.push_str(&filled.on_white().to_string());
       }
     }
-  }
 
-  pub fn info<T>(&mut self, messages: &[T]) -> String
-  where
-    T: ToString,
-  {
-    self.format(LogLevel::Info, messages)
-  }
-
-  pub fn warn<T>(&mut self, messages: &[T]) -> String
-  where
-    T: ToString,
-  {
-    self.format(LogLevel::Warning, messages)
-  }
-
-  pub fn error<T>(&mut self, messages: &[T]) -> String
-  where
-    T: ToString,
-  {
-    self.format(LogLevel::Error, messages)
-  }
-
-  pub fn success<T>(&mut self, messages: &[T]) -> String
-  where
-    T: ToString,
-  {
-    self.format(LogLevel::Success, messages)
-  }
-
-  pub fn progress(&mut self, message: impl AsRef<str>, progress: f64, width: usize) -> String {
-    let width = width.max(1);
-    let progress = progress.clamp(0.0, 1.0);
-    let filled = ((width as f64) * progress).round() as usize;
-    let base = format!("{} {}", self.prefix(), message.as_ref());
-    let mut output = base.chars().take(width).collect::<String>();
-    if output.len() < width {
-      output.push_str(&" ".repeat(width - output.len()));
+    if !empty_chars.is_empty() {
+      if name_empty_overlap > 0 {
+        let name_part: String = empty_chars[..name_empty_overlap].iter().collect();
+        let rest: String = empty_chars[name_empty_overlap..].iter().collect();
+        output.push_str(&name_part.magenta().to_string());
+        output.push_str(&rest);
+      } else {
+        let empty: String = empty_chars.iter().collect();
+        output.push_str(&empty);
+      }
     }
-    let (a, b) = output.split_at(filled.min(output.len()));
+
+    print!("\r{}", output);
+    let _ = std::io::stdout().flush();
     self.last_progress = true;
-    format!("{}{}", a, b)
   }
 
   pub fn had_progress_line(&self) -> bool {

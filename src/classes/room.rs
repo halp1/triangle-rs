@@ -4,7 +4,11 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 
 use crate::{
-  classes::{ClientUser, Ribbon, game::Game, ribbon},
+  classes::{
+    ClientUser, Ribbon,
+    game::{self, Game},
+    ribbon,
+  },
   types::{
     events::{
       recv::{self, room::Update},
@@ -60,7 +64,7 @@ pub struct Room {
 }
 
 impl Room {
-  pub fn new(
+  pub async fn new(
     ribbon: Ribbon,
     game: Arc<Mutex<Option<Game>>>,
     me: ClientUser,
@@ -102,9 +106,9 @@ impl Room {
       })),
     };
 
-    Self::handle_update(room.state.clone(), _update);
+    Self::handle_update(room.state.clone(), _update).await;
 
-    room.init();
+    room.init().await;
 
     room
   }
@@ -142,13 +146,13 @@ impl Room {
   }
 
   async fn init(&self) {
-    let mut ribbon = self.ribbon.clone();
+    let ribbon = self.ribbon.clone();
     let state = self.state.clone();
 
     self
       .hook
       .on::<recv::room::update::Host>(async move |event| {
-        self.state.lock().await.owner = event.0;
+        state.lock().await.owner = event.0;
 
         ribbon
           .emit(send::client::room::Players(
@@ -158,6 +162,7 @@ impl Room {
       })
       .await;
 
+    let state = self.state.clone();
     self
       .hook
       .on::<recv::room::update::Auto>(async move |event| {
@@ -165,12 +170,17 @@ impl Room {
       })
       .await;
 
+    let state = self.state.clone();
+
     self
       .hook
       .on::<recv::room::Update>(async move |update| {
         Self::handle_update(state.clone(), update).await;
       })
       .await;
+
+    let ribbon = self.ribbon.clone();
+    let state = self.state.clone();
 
     self
       .hook
@@ -184,6 +194,9 @@ impl Room {
           .await;
       })
       .await;
+
+    let ribbon = self.ribbon.clone();
+    let state = self.state.clone();
 
     self
       .hook
@@ -200,6 +213,8 @@ impl Room {
 
     // TODO: game hooks
 
+    let state = self.state.clone();
+
     self
       .hook
       .on::<recv::room::Chat>(async move |event| {
@@ -207,27 +222,31 @@ impl Room {
       })
       .await;
 
+    let ribbon = self.ribbon.clone();
     let hook = self.hook.clone();
+    let game = self.game.clone();
 
     self
       .hook
       .on::<recv::room::Leave>(async move |_| {
         hook.destroy().await;
-        if let Some(game) = self.game.lock().await.take() {
+        if let Some(game) = game.lock().await.take() {
           game.destroy().await;
           drop(game);
-          ribbon
-            .emit(send::client::game::Over::Leave)
-            .await;
+          ribbon.emit(send::client::game::Over::Leave).await;
         }
       })
       .await;
+
+    let ribbon = self.ribbon.clone();
+    let hook = self.hook.clone();
+    let game = self.game.clone();
 
     self
       .hook
       .on::<recv::room::Kick>(async move |_| {
         hook.destroy().await;
-        if let Some(game) = self.game.lock().await.take() {
+        if let Some(game) = game.lock().await.take() {
           game.destroy().await;
           drop(game);
           ribbon.emit(send::client::game::Over::Leave).await;
@@ -259,7 +278,7 @@ impl Room {
     duration: Duration,
   ) -> Result<recv::room::player::Remove, ribbon::WrapError> {
     self
-      .hook
+      .ribbon
       .wrap::<recv::room::player::Remove>(send::room::Kick {
         uid: id.to_string(),
         duration: duration.as_secs_f64(),
@@ -279,7 +298,7 @@ impl Room {
 
   pub async fn chat(&mut self, message: &str) -> Result<recv::room::Chat, ribbon::WrapError> {
     self
-      .hook
+      .ribbon
       .wrap::<recv::room::Chat>(send::room::Chat {
         content: message.to_string(),
         pinned: false,
@@ -292,7 +311,7 @@ impl Room {
     message: &str,
   ) -> Result<recv::room::Chat, ribbon::WrapError> {
     self
-      .hook
+      .ribbon
       .wrap::<recv::room::Chat>(send::room::Chat {
         content: message.to_string(),
         pinned: true,

@@ -3,46 +3,49 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{engine::utils::tetromino::data::MinoExt, types::game::SpinBonuses};
+use crate::{
+  engine::utils::tetromino::data::{MinoColor, MinoExt},
+  types::game::SpinBonuses,
+};
 
 type KickList = Vec<(i32, i32)>;
 type KickMap = HashMap<&'static str, KickList>;
 
 //  "none" | "SRS" | "SRS+" | "SRS-X" | "TETRA-X" | "NRS" | "ARS" | "ASC"
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum KickTable {
-	None,
-	SRS,
-	SRSPlus,
-	SRSX,
-	TetraX,
-	NRS,
-	ARS,
-	ASC,
+  None,
+  SRS,
+  SRSPlus,
+  SRSX,
+  TetraX,
+  NRS,
+  ARS,
+  ASC,
 }
 
 impl KickTable {
-	pub fn data(&self) -> KickTableData {
-		KICK_TABLES.get(self).cloned().unwrap()
-	}
+  pub fn data(&self) -> KickTableData {
+    KICK_TABLES.get(self).cloned().unwrap()
+  }
 }
 
+#[derive(Debug, Clone)]
 pub struct KickTableData {
   pub kicks: KickMap,
-  pub per_piece: HashMap<&'static str, KickMap>,
-  pub additional_offsets: HashMap<&'static str, [(i32, i32); 4]>,
-  pub spawn_rotation: HashMap<&'static str, u8>,
-  pub color_map: HashMap<&'static str, &'static str>,
-  pub preview_overrides: HashMap<&'static str, Vec<(i32, i32, u8)>>,
+  pub per_piece: HashMap<MinoExt, KickMap>,
+  pub additional_offsets: HashMap<MinoExt, [(i32, i32); 4]>,
+  pub spawn_rotation: HashMap<MinoExt, u8>,
+  pub color_map: HashMap<MinoExt, MinoColor>,
+  pub preview_overrides: HashMap<MinoExt, Vec<(i32, i32, u8)>>,
   pub allow_o_kick: bool,
   pub center_column: Vec<(i32, i32)>,
 }
 
 impl KickTableData {
   pub fn get_kicks(&self, piece: MinoExt, transition: &str) -> &[(i32, i32)] {
-    let piece_key = format!("{}_kicks", piece.as_str());
-    if let Some(per_piece_map) = self.per_piece.get(piece_key.as_str()) {
+    if let Some(per_piece_map) = self.per_piece.get(&piece) {
       if let Some(kicks) = per_piece_map.get(transition) {
         return kicks.as_slice();
       }
@@ -59,28 +62,27 @@ fn km(pairs: &[(&'static str, &[(i32, i32)])]) -> KickMap {
   pairs.iter().map(|&(k, v)| (k, v.to_vec())).collect()
 }
 
-fn color_map_standard() -> HashMap<&'static str, &'static str> {
+fn color_map_standard() -> HashMap<MinoExt, MinoColor> {
   [
-    ("i1", "i"),
-    ("i2", "i"),
-    ("i3", "i"),
-    ("l3", "j"),
-    ("i5", "i"),
-    ("z", "z"),
-    ("l", "l"),
-    ("o", "o"),
-    ("s", "s"),
-    ("i", "i"),
-    ("j", "j"),
-    ("t", "t"),
-    ("oo", "o"),
-    ("g", "g"),
-    ("d", "d"),
-    ("gb", "gb"),
-    ("gbd", "gbd"),
+    (MinoExt::I1, MinoColor::I),
+    (MinoExt::I2, MinoColor::I),
+    (MinoExt::I3, MinoColor::I),
+    (MinoExt::L3, MinoColor::J),
+    (MinoExt::I5, MinoColor::I),
+    (MinoExt::Z, MinoColor::Z),
+    (MinoExt::L, MinoColor::L),
+    (MinoExt::O, MinoColor::O),
+    (MinoExt::S, MinoColor::S),
+    (MinoExt::I, MinoColor::I),
+    (MinoExt::J, MinoColor::J),
+    (MinoExt::T, MinoColor::T),
+    (MinoExt::OO, MinoColor::O),
+    (MinoExt::G, MinoColor::G),
+    (MinoExt::D, MinoColor::D),
+    (MinoExt::GB, MinoColor::GB),
+    (MinoExt::GBD, MinoColor::GBD),
   ]
-  .iter()
-  .cloned()
+  .into_iter()
   .collect()
 }
 
@@ -108,7 +110,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       per_piece: {
         let mut pp = HashMap::new();
         pp.insert(
-          "i_kicks",
+          MinoExt::I,
           km(&[
             ("01", &[(-2, 0), (1, 0), (-2, 1), (1, -2)]),
             ("10", &[(2, 0), (-1, 0), (2, -1), (-1, 2)]),
@@ -125,7 +127,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "i2_kicks",
+          MinoExt::I2,
           km(&[
             ("01", &[(0, -1), (-1, 0), (-1, -1)]),
             ("10", &[(0, 1), (1, 0), (1, 1)]),
@@ -142,7 +144,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "i3_kicks",
+          MinoExt::I3,
           km(&[
             ("01", &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
             ("10", &[(-1, 0), (1, 0), (0, -1), (0, 1)]),
@@ -159,7 +161,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "l3_kicks",
+          MinoExt::L3,
           km(&[
             ("01", &[(-1, 0), (1, 0)]),
             ("10", &[(1, 0), (-1, 0)]),
@@ -176,7 +178,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "i5_kicks",
+          MinoExt::I5,
           km(&[
             ("01", &[(-2, 0), (2, 0), (-2, 1), (2, -2)]),
             ("10", &[(2, 0), (-2, 0), (2, -1), (-2, 2)]),
@@ -193,7 +195,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "oo_kicks",
+          MinoExt::OO,
           km(&[
             (
               "01",
@@ -265,7 +267,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       per_piece: {
         let mut pp = HashMap::new();
         pp.insert(
-          "i_kicks",
+          MinoExt::I,
           km(&[
             ("01", &[(1, 0), (-2, 0), (-2, 1), (1, -2)]),
             ("10", &[(-1, 0), (2, 0), (-1, 2), (2, -1)]),
@@ -282,7 +284,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "i2_kicks",
+          MinoExt::I2,
           km(&[
             ("01", &[(0, -1), (-1, 0), (-1, -1)]),
             ("10", &[(0, 1), (1, 0), (1, 1)]),
@@ -299,7 +301,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "i3_kicks",
+          MinoExt::I3,
           km(&[
             ("01", &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
             ("10", &[(-1, 0), (1, 0), (0, -1), (0, 1)]),
@@ -316,7 +318,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "l3_kicks",
+          MinoExt::L3,
           km(&[
             ("01", &[(-1, 0), (1, 0)]),
             ("10", &[(1, 0), (-1, 0)]),
@@ -333,7 +335,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "i5_kicks",
+          MinoExt::I5,
           km(&[
             ("01", &[(-2, 0), (2, 0), (-2, 1), (2, -2)]),
             ("10", &[(2, 0), (-2, 0), (2, -1), (-2, 2)]),
@@ -350,7 +352,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           ]),
         );
         pp.insert(
-          "oo_kicks",
+          MinoExt::OO,
           km(&[
             (
               "01",
@@ -633,7 +635,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       },
       per_piece: {
         let mut pp = HashMap::new();
-        pp.insert("i_kicks", {
+        pp.insert(MinoExt::I, {
           let base = km(&[
             ("01", &[(-2, 0), (1, 0), (-2, 1), (1, -2)]),
             ("10", &[(2, 0), (-1, 0), (2, -1), (-1, 2)]),
@@ -648,7 +650,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           all.extend(srsx_180_i.clone());
           all
         });
-        pp.insert("i2_kicks", {
+        pp.insert(MinoExt::I2, {
           let base = km(&[
             ("01", &[(0, -1), (-1, 0), (-1, -1)]),
             ("10", &[(0, 1), (1, 0), (1, 1)]),
@@ -663,7 +665,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           all.extend(srsx_180_i2.clone());
           all
         });
-        pp.insert("i3_kicks", {
+        pp.insert(MinoExt::I3, {
           let base = km(&[
             ("01", &[(1, 0), (-1, 0), (0, 1), (0, -1)]),
             ("10", &[(-1, 0), (1, 0), (0, -1), (0, 1)]),
@@ -678,7 +680,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           all.extend(srsx_180_i3.clone());
           all
         });
-        pp.insert("l3_kicks", {
+        pp.insert(MinoExt::L3, {
           let base = km(&[
             ("01", &[(-1, 0), (1, 0)]),
             ("10", &[(1, 0), (-1, 0)]),
@@ -693,7 +695,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           all.extend(srsx_180_l3.clone());
           all
         });
-        pp.insert("i5_kicks", {
+        pp.insert(MinoExt::I5, {
           let base = km(&[
             ("01", &[(-2, 0), (2, 0), (-2, 1), (2, -2)]),
             ("10", &[(2, 0), (-2, 0), (2, -1), (-2, 2)]),
@@ -709,7 +711,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
           all
         });
         pp.insert(
-          "oo_kicks",
+          MinoExt::OO,
           km(&[
             (
               "01",
@@ -878,7 +880,7 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       per_piece: {
         let mut pp = HashMap::new();
         pp.insert(
-          "i_kicks",
+          MinoExt::I,
           km(&[
             (
               "01",
@@ -927,26 +929,25 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       additional_offsets: HashMap::new(),
       spawn_rotation: HashMap::new(),
       color_map: [
-        ("i1", "i"),
-        ("i2", "i"),
-        ("i3", "i"),
-        ("l3", "j"),
-        ("i5", "i"),
-        ("z", "z"),
-        ("l", "o"),
-        ("o", "s"),
-        ("s", "i"),
-        ("i", "l"),
-        ("j", "j"),
-        ("t", "t"),
-        ("oo", "o"),
-        ("g", "g"),
-        ("d", "d"),
-        ("gb", "gb"),
-        ("gbd", "gbd"),
+        (MinoExt::I1, MinoColor::I),
+        (MinoExt::I2, MinoColor::I),
+        (MinoExt::I3, MinoColor::I),
+        (MinoExt::L3, MinoColor::J),
+        (MinoExt::I5, MinoColor::I),
+        (MinoExt::Z, MinoColor::Z),
+        (MinoExt::L, MinoColor::O),
+        (MinoExt::O, MinoColor::S),
+        (MinoExt::S, MinoColor::I),
+        (MinoExt::I, MinoColor::L),
+        (MinoExt::J, MinoColor::J),
+        (MinoExt::T, MinoColor::T),
+        (MinoExt::OO, MinoColor::O),
+        (MinoExt::G, MinoColor::G),
+        (MinoExt::D, MinoColor::D),
+        (MinoExt::GB, MinoColor::GB),
+        (MinoExt::GBD, MinoColor::GBD),
       ]
-      .iter()
-      .cloned()
+      .into_iter()
       .collect(),
       preview_overrides: HashMap::new(),
       allow_o_kick: false,
@@ -974,37 +975,35 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       ]),
       per_piece: HashMap::new(),
       additional_offsets: [
-        ("z", [(1, 1), (1, 0), (1, 0), (2, 0)]),
-        ("l", [(1, 0), (1, 0), (1, 0), (1, 0)]),
-        ("o", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("s", [(1, 1), (1, 0), (1, 0), (2, 0)]),
-        ("i", [(0, 1), (0, 0), (0, 0), (1, 0)]),
-        ("j", [(1, 0), (1, 0), (1, 0), (1, 0)]),
-        ("t", [(1, 0), (1, 0), (1, 0), (1, 0)]),
+        (MinoExt::Z, [(1, 1), (1, 0), (1, 0), (2, 0)]),
+        (MinoExt::L, [(1, 0), (1, 0), (1, 0), (1, 0)]),
+        (MinoExt::O, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::S, [(1, 1), (1, 0), (1, 0), (2, 0)]),
+        (MinoExt::I, [(0, 1), (0, 0), (0, 0), (1, 0)]),
+        (MinoExt::J, [(1, 0), (1, 0), (1, 0), (1, 0)]),
+        (MinoExt::T, [(1, 0), (1, 0), (1, 0), (1, 0)]),
       ]
       .iter()
       .cloned()
       .collect(),
       spawn_rotation: [
-        ("z", 0u8),
-        ("l", 2),
-        ("o", 0),
-        ("s", 0),
-        ("i", 0),
-        ("j", 2),
-        ("t", 2),
+        (MinoExt::Z, 0u8),
+        (MinoExt::L, 2),
+        (MinoExt::O, 0),
+        (MinoExt::S, 0),
+        (MinoExt::I, 0),
+        (MinoExt::J, 2),
+        (MinoExt::T, 2),
       ]
-      .iter()
-      .cloned()
+      .into_iter()
       .collect(),
       color_map: color_map_standard(),
       preview_overrides: [
-        ("l", vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)]),
-        ("j", vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)]),
-        ("t", vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)]),
+        (MinoExt::L, vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)]),
+        (MinoExt::J, vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)]),
+        (MinoExt::T, vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)]),
       ]
-      .iter()
-      .cloned()
+      .into_iter()
       .collect(),
       allow_o_kick: false,
       center_column: Vec::new(),
@@ -1031,58 +1030,55 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       ]),
       per_piece: HashMap::new(),
       additional_offsets: [
-        ("i1", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("z", [(0, 1), (0, 0), (0, 0), (1, 0)]),
-        ("l", [(0, 1), (0, 0), (0, 0), (0, 0)]),
-        ("o", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("s", [(0, 1), (-1, 0), (0, 0), (0, 0)]),
-        ("i", [(0, 0), (0, 0), (0, -1), (1, 0)]),
-        ("j", [(0, 1), (0, 0), (0, 0), (0, 0)]),
-        ("t", [(0, 1), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::I1, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::Z, [(0, 1), (0, 0), (0, 0), (1, 0)]),
+        (MinoExt::L, [(0, 1), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::O, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::S, [(0, 1), (-1, 0), (0, 0), (0, 0)]),
+        (MinoExt::I, [(0, 0), (0, 0), (0, -1), (1, 0)]),
+        (MinoExt::J, [(0, 1), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::T, [(0, 1), (0, 0), (0, 0), (0, 0)]),
       ]
       .iter()
       .cloned()
       .collect(),
       spawn_rotation: [
-        ("z", 0u8),
-        ("l", 2),
-        ("o", 0),
-        ("s", 0),
-        ("i", 0),
-        ("j", 2),
-        ("t", 2),
+        (MinoExt::Z, 0u8),
+        (MinoExt::L, 2),
+        (MinoExt::O, 0),
+        (MinoExt::S, 0),
+        (MinoExt::I, 0),
+        (MinoExt::J, 2),
+        (MinoExt::T, 2),
       ]
-      .iter()
-      .cloned()
+      .into_iter()
       .collect(),
       color_map: [
-        ("i1", "i"),
-        ("i2", "i"),
-        ("i3", "i"),
-        ("l3", "j"),
-        ("i5", "i"),
-        ("z", "s"),
-        ("l", "l"),
-        ("o", "o"),
-        ("s", "t"),
-        ("i", "z"),
-        ("j", "j"),
-        ("t", "i"),
-        ("g", "g"),
-        ("d", "d"),
-        ("gb", "gb"),
-        ("gbd", "gbd"),
+        (MinoExt::I1, MinoColor::I),
+        (MinoExt::I2, MinoColor::I),
+        (MinoExt::I3, MinoColor::I),
+        (MinoExt::L3, MinoColor::J),
+        (MinoExt::I5, MinoColor::I),
+        (MinoExt::Z, MinoColor::S),
+        (MinoExt::L, MinoColor::L),
+        (MinoExt::O, MinoColor::O),
+        (MinoExt::S, MinoColor::T),
+        (MinoExt::I, MinoColor::Z),
+        (MinoExt::J, MinoColor::J),
+        (MinoExt::T, MinoColor::I),
+        (MinoExt::G, MinoColor::G),
+        (MinoExt::D, MinoColor::D),
+        (MinoExt::GB, MinoColor::GB),
+        (MinoExt::GBD, MinoColor::GBD),
       ]
-      .iter()
-      .cloned()
+      .into_iter()
       .collect(),
       preview_overrides: [
-        ("l", vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)]),
-        ("j", vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)]),
-        ("t", vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)]),
+        (MinoExt::L, vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)]),
+        (MinoExt::J, vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)]),
+        (MinoExt::T, vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)]),
       ]
-      .iter()
-      .cloned()
+      .into_iter()
       .collect(),
       allow_o_kick: false,
       center_column: vec![
@@ -1320,18 +1316,18 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       kicks: asc_kicks_ccw.clone(),
       per_piece: {
         let mut pp = HashMap::new();
-        pp.insert("i_kicks", asc_kicks_ccw.clone());
+        pp.insert(MinoExt::I, asc_kicks_ccw.clone());
         pp
       },
       additional_offsets: [
-        ("i1", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("z", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("l", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("o", [(0, 0), (0, 1), (-1, 1), (-1, 0)]),
-        ("s", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("i", [(0, 0), (0, -1), (1, -1), (1, 0)]),
-        ("j", [(0, 0), (0, 0), (0, 0), (0, 0)]),
-        ("t", [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::I1, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::Z, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::L, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::O, [(0, 0), (0, 1), (-1, 1), (-1, 0)]),
+        (MinoExt::S, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::I, [(0, 0), (0, -1), (1, -1), (1, 0)]),
+        (MinoExt::J, [(0, 0), (0, 0), (0, 0), (0, 0)]),
+        (MinoExt::T, [(0, 0), (0, 0), (0, 0), (0, 0)]),
       ]
       .iter()
       .cloned()

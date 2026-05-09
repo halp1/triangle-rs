@@ -15,9 +15,9 @@ use triangle::classes::{Client, ClientOptions};
 async fn client_connect() {
   dotenvy::dotenv().ok();
   let token = std::env::var("TOKEN").expect("TOKEN environment variable must be set");
-  let client = Client::create(ClientOptions::with_token(token))
+  let client = Client::new(ClientOptions::with_token(token))
     .await
-    .expect("Client::create should succeed");
+    .expect("Client::new should succeed");
 
   assert!(
     !client.user.id.is_empty(),

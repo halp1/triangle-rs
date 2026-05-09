@@ -50,7 +50,8 @@ impl Player {
     let hook = ribbon.hook();
 
     let state = Arc::new(Mutex::new(PlayerState {
-      engine: Game::create_engine(me.options, me.gameid, players),
+      // engine: Game::create_engine(me.options, me.gameid, players),
+			engine: unimplemented!(), // TODO: implement
       state: SpectatingState::Inactive,
       queue: Vec::new(),
       strategy,
@@ -94,11 +95,11 @@ impl Player {
             // TODO: what to do here?
           }
           ReplayState::State(data) => {
-            state.engine.from_snapshot(Game::snapshot_from_state(
-              data.frame,
-              state.engine.initializer.clone(),
-              data.game,
-            ));
+            // state.engine.from_snapshot(Game::snapshot_from_state(
+            //   data.frame,
+            //   state.engine.initializer.clone(),
+            //   data.game,
+            // ));
           }
         }
       })
@@ -107,7 +108,7 @@ impl Player {
     player
       .hook
       .on::<recv::game::Replay>(async move |event| {
-        let state = state.lock().await;
+        let mut state = state.lock().await;
         if event.gameid != gameid
           || state.state != SpectatingState::Active
           || state.engine.topped_out()
@@ -115,7 +116,7 @@ impl Player {
           return;
         }
 
-        state.queue.append(&mut event.frames);
+        state.queue.append(&mut event.frames.clone());
       })
       .await;
 
@@ -190,7 +191,7 @@ impl Player {
       frames.push(state.queue.remove(0));
     }
 
-    state.engine.tick(frames);
+    state.engine.tick(&frames);
   }
 
   pub async fn _tick(&self) {

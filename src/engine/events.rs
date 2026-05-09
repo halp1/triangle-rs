@@ -12,8 +12,8 @@ pub mod garbage {
 
   event!(garbage.receive => Receive {
     iid: u64,
-    amount: u64,
-    original_amount: u64,
+    amount: u32,
+    original_amount: u32,
   });
   event!(garbage.confirm => Confirm {
     iid: u64,
@@ -23,12 +23,12 @@ pub mod garbage {
   event!(garbage.tank => Tank {
     iid: u64,
     column: usize,
-    amount: u64,
+    amount: u32,
     size: usize,
   });
   event!(garbage.cancel => Cancel {
     iid: u64,
-    amount: u64,
+    amount: u32,
     size: usize,
   });
 }

@@ -12,18 +12,18 @@ pub struct TetrominoSnapshot {
   pub symbol: Mino,
   pub location: [f64; 2],
   pub locking: f64,
-  pub lock_resets: u64,
-  pub rot_resets: u64,
-  pub safe_lock: u64,
+  pub lock_resets: u32,
+  pub rot_resets: u32,
+  pub safe_lock: u32,
   pub highest_y: f64,
   pub rotation: Rotation,
-  pub falling_rotations: u64,
-  pub total_rotations: u64,
-  pub irs: i32,
+  pub falling_rotations: u32,
+  pub total_rotations: u32,
+  pub irs: i8,
   pub ihs: bool,
   pub aox: i32,
   pub aoy: i32,
-  pub keys: u64,
+  pub keys: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -43,23 +43,24 @@ pub struct Tetromino {
   pub location: [f64; 2],
 
   pub locking: f64,
-  pub lock_resets: u64,
-  pub rot_resets: u64,
-  pub safe_lock: u64,
+  pub lock_resets: u32,
+  pub rot_resets: u32,
+  pub safe_lock: u32,
   pub highest_y: f64,
-  pub falling_rotations: u64,
-  pub total_rotations: u64,
-  pub irs: i32,
+  pub falling_rotations: u32,
+  pub total_rotations: u32,
+  pub irs: i8,
   pub ihs: bool,
   pub aox: i32,
   pub aoy: i32,
-  pub keys: u64,
+  pub keys: u32,
 }
 
 impl Tetromino {
   pub fn new(params: TetrominoInitParams) -> Self {
     let tetromino = TETROMINOES
-      .get(&params.symbol.into()).expect("unknown mino type");
+      .get(&params.symbol.into())
+      .expect("unknown mino type");
 
     let states: Vec<Vec<Block>> = tetromino.matrix.data.iter().map(|r| r.clone()).collect();
 
@@ -224,7 +225,11 @@ impl Tetromino {
     }
   }
 
-  pub fn from_snapshot(snapshot: &TetrominoSnapshot, board_height: usize, board_width: usize) -> Self {
+  pub fn from_snapshot(
+    snapshot: &TetrominoSnapshot,
+    board_height: usize,
+    board_width: usize,
+  ) -> Self {
     let mut t = Tetromino::new(TetrominoInitParams {
       symbol: snapshot.symbol,
       initial_rotation: snapshot.rotation,

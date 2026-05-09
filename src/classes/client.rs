@@ -3,7 +3,11 @@ use std::sync::Arc;
 use tokio::{select, sync::Mutex};
 
 use crate::{
-  classes::{game::Game, ribbon::{self, WrapError}, room::Room},
+  classes::{
+    game::Game,
+    ribbon::{self, WrapError},
+    room::Room,
+  },
   types::{
     events::{recv, send},
     game::{Handling, SpectatingStrategy},
@@ -217,10 +221,8 @@ impl Client {
       .on::<recv::room::Join>(async move |_| {
         let update = ribbon.wait::<recv::room::Update>().await;
         if let Some(update) = update {
-          room
-            .lock()
-            .await
-            .replace(Room::new(ribbon.clone(), game.clone(), me.clone(), update));
+          let r = Room::new(ribbon.clone(), game.clone(), me.clone(), update).await;
+          room.lock().await.replace(r);
           // TODO: set client.room idk how to do that
           ribbon.emit(send::client::room::Join {}).await;
         }

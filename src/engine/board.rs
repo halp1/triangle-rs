@@ -23,7 +23,7 @@ pub struct BoardInitParams {
 
 #[derive(Debug, Clone)]
 pub struct InsertGarbageParams {
-  pub amount: usize,
+  pub amount: u32,
   pub size: usize,
   pub column: usize,
   pub bombs: bool,
@@ -33,8 +33,8 @@ pub struct InsertGarbageParams {
 
 #[derive(Debug, Clone)]
 pub struct ClearResult {
-  pub lines: usize,
-  pub garbage_cleared: usize,
+  pub lines: u32,
+  pub garbage_cleared: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +82,7 @@ impl Board {
   pub fn clear_lines(&mut self) -> ClearResult {
     let full_height = self.full_height();
     let width = self.width;
-    let mut garbage_cleared = 0usize;
+    let mut garbage_cleared = 0u32;
     let mut lines: Vec<usize> = Vec::new();
 
     for idx in 0..full_height {
@@ -141,7 +141,7 @@ impl Board {
     }
 
     ClearResult {
-      lines: lines.len(),
+      lines: lines.len() as u32,
       garbage_cleared,
     }
   }
@@ -213,7 +213,7 @@ impl Board {
       };
     }
 
-    let n = lines.len();
+    let n = lines.len() as u32;
     for &line in &lines {
       self.state.remove(line);
       self.state.push(vec![None; self.width]);
@@ -297,8 +297,8 @@ impl Board {
     let mut combined = new_rows;
     combined.append(&mut old_state);
 
-    let remove_start = full_height.saturating_sub(amount + 1);
-    combined.drain(remove_start..remove_start + amount);
+    let remove_start = full_height.saturating_sub(amount as usize + 1);
+    combined.drain(remove_start..remove_start + amount as usize);
 
     self.state = combined;
   }

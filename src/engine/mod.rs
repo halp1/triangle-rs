@@ -18,7 +18,7 @@ use queue::{Queue, QueueInitParams, QueueSnapshot};
 use utils::{
   damage_calc::{GarbageCalcConfig, GarbageCalcInput, garbage_calc_v2},
   increase::IncreaseTracker,
-  kicks::{KICK_TABLES, legal, perform_kick},
+  kicks::{legal, perform_kick},
   tetromino::{Tetromino, TetrominoInitParams, TetrominoSnapshot},
 };
 
@@ -27,9 +27,9 @@ use serde::{Deserialize, Serialize};
 use crate::classes::ribbon::Hook;
 use crate::engine::utils::KickTable;
 use crate::engine::utils::tetromino::data::MinoExt;
-use crate::types::game::replay::Frame;
 use crate::types::game::{
-  Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Spin, SpinBonuses, ige,
+  Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Key, Spin, SpinBonuses,
+  ige, replay,
 };
 use crate::utils::EventEmitter;
 
@@ -122,9 +122,9 @@ pub struct EngineStats {
   pub garbage_attack: u64,
   pub garbage_receive: u64,
   pub garbage_cleared: u64,
-  pub combo: u64,
-  pub b2b: u64,
-  pub pieces: u64,
+  pub combo: i32,
+  pub b2b: i32,
+  pub pieces: u32,
   pub lines: u64,
 }
 
@@ -133,7 +133,7 @@ pub struct ShiftState {
   pub held: bool,
   pub arr: f64,
   pub das: f64,
-  pub dir: u64,
+  pub dir: i8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,7 +157,7 @@ pub struct InputTime {
 pub struct InputState {
   pub l_shift: ShiftState,
   pub r_shift: ShiftState,
-  pub last_shift: u64,
+  pub last_shift: i8,
   pub keys: InputKeys,
   pub first_input_time: f64,
   pub time: InputTime,
@@ -185,20 +185,20 @@ pub struct PracticeState {
   pub undo: Vec<EngineSnapshot>,
   pub redo: Vec<EngineSnapshot>,
   pub retry: bool,
-  pub retry_iter: u64,
+  pub retry_iter: u32,
   pub last_piece: Option<Box<EngineSnapshot>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SpikeState {
-  pub count: u64,
-  pub timer: u64,
+  pub count: u32,
+  pub timer: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResCache {
-  pub pieces: u64,
-  pub garbage_sent: Vec<u64>,
+  pub pieces: u32,
+  pub garbage_sent: Vec<u32>,
   pub garbage_received: Vec<OutgoingGarbage>,
   pub keys: Vec<String>,
   pub last_lock: f64,
@@ -254,10 +254,10 @@ impl GarbageQueueVariant {
 
   fn cancel(
     &mut self,
-    amount: u64,
-    piece_count: u64,
+    amount: u32,
+    piece_count: u32,
     legacy_opener: bool,
-  ) -> (u64, Vec<IncomingGarbage>) {
+  ) -> (u32, Vec<IncomingGarbage>) {
     match self {
       Self::New(q) => q.cancel(amount, piece_count, legacy_opener),
       Self::Legacy(q) => q.cancel(amount, piece_count, legacy_opener),
@@ -271,7 +271,7 @@ impl GarbageQueueVariant {
     }
   }
 
-  fn round(&mut self, amount: f64) -> u64 {
+  fn round(&mut self, amount: f64) -> u32 {
     match self {
       Self::New(q) => q.round(amount),
       Self::Legacy(q) => q.round(amount),
@@ -371,12 +371,12 @@ impl Serialize for Engine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockResult {
   pub mino: Mino,
-  pub garbage_cleared: usize,
-  pub lines: usize,
+  pub garbage_cleared: u32,
+  pub lines: u32,
   pub spin: Spin,
-  pub raw_garbage: Vec<u64>,
-  pub garbage: Vec<u64>,
-  pub surge: u64,
+  pub raw_garbage: Vec<u32>,
+  pub garbage: Vec<u32>,
+  pub surge: u32,
   pub stats: EngineStats,
   pub garbage_added: Option<Vec<OutgoingGarbage>>,
   pub topout: bool,
@@ -586,14 +586,15 @@ impl Engine {
   }
 
   fn should_lock(&self) -> bool {
-    !self.misc.movement.infinite && self.falling.lock_resets >= self.misc.movement.lock_resets
+    !self.misc.movement.infinite
+      && self.falling.lock_resets >= self.misc.movement.lock_resets as u32
   }
 
   fn should_fall_faster(&self) -> bool {
     if self.misc.movement.infinite {
       return false;
     }
-    self.falling.rot_resets > self.misc.movement.lock_resets + 15
+    self.falling.rot_resets > self.misc.movement.lock_resets as u32 + 15
   }
 
   fn internal_lock_check(&mut self, subframe: f64) -> bool {
@@ -649,6 +650,26 @@ impl Engine {
     while self.internal_fall(1.0) {}
   }
 
+  pub fn topped_out(&self) -> bool {
+    for block in self.falling.absolute_blocks() {
+      if block.1 < 0 {
+        return true;
+      }
+      if let Some(row) = self.board.state.get(block.1 as usize) {
+        if let Some(cell) = row.get(block.0 as usize) {
+          if cell.is_some() {
+            return true;
+          }
+        } else {
+          return true;
+        }
+      } else {
+        return true;
+      }
+    }
+    false
+  }
+
   fn dcd(&mut self) {
     if !self.has_hit_wall() || self.handling.dcd == 0.0 {
       return;
@@ -696,8 +717,12 @@ impl Engine {
     }
 
     if self.should_fall_faster() {
-      fall +=
-        0.5 * subframe * (self.falling.rot_resets - (self.misc.movement.lock_resets + 15)) as f64;
+      fall += 0.5
+        * subframe
+        * (self
+          .falling
+          .rot_resets
+          .saturating_sub(self.misc.movement.lock_resets as u32 + 15)) as f64;
     }
 
     let mut drop_factor = fall;
@@ -728,7 +753,7 @@ impl Engine {
     ((self.falling.rotation() as i32 + amount).rem_euclid(4)) as u8
   }
 
-  fn detect_tspin_kick(&self, kick_id: &str, kick: &[u64; 2]) -> bool {
+  fn detect_tspin_kick(&self, kick_id: &str, kick: &[i32; 2]) -> bool {
     ((kick_id == "23" || kick_id == "03") && kick[0] == 1 && kick[1] == -2)
       || ((kick_id == "21" || kick_id == "01") && kick[0] == -1 && kick[1] == -2)
   }
@@ -744,7 +769,8 @@ impl Engine {
       falling.symbol,
       falling.location,
       [falling.aox, falling.aoy],
-      !self.misc.movement.infinite && falling.total_rotations > self.misc.movement.lock_resets + 15,
+      !self.misc.movement.infinite
+        && falling.total_rotations > self.misc.movement.lock_resets as u32 + 15,
       &blocks,
       falling.rotation(),
       to,
@@ -759,7 +785,7 @@ impl Engine {
     new_rotation: u8,
     rotation_direction: i32,
     kick_id: &str,
-    kick: &[u64; 2],
+    kick: &[i32; 2],
   ) -> bool {
     let is_180 = rotation_direction.abs() >= 2;
     let dir = if is_180 {
@@ -777,7 +803,7 @@ impl Engine {
     }
     self.falling.location[0] = new_x;
     self.falling.location[1] = new_y;
-    self.falling.set_rotation(new_rotation as u8);
+    self.falling.set_rotation(new_rotation as i32);
 
     if dir == 1 {
       self.state |= ROTATION_RIGHT;
@@ -815,7 +841,7 @@ impl Engine {
   fn rotate(&mut self, amount: i32, _is_irs: bool) -> bool {
     if self.is_sleep() {
       if self.handling.irs == Buffering::Tap {
-        self.falling.irs = ((self.falling.irs + amount).rem_euclid(4));
+        self.falling.irs = (self.falling.irs as i32 + amount).rem_euclid(4) as i8;
       }
       return false;
     }
@@ -849,7 +875,7 @@ impl Engine {
       let orig_y = self.falling.location[1];
       let orig_hy = self.falling.highest_y;
 
-      while self.falling.y() < self.board.full_height() as u64 {
+      while self.falling.y() < self.board.full_height() as i32 {
         self.falling.location[1] += 1.0;
         self.falling.highest_y += 1.0;
         let abs = self.falling.absolute_blocks();
@@ -870,17 +896,17 @@ impl Engine {
 
   pub fn initiate_piece(&mut self, piece: Mino, ignore_blockout: bool, is_hold: bool) {
     if self.handling.irs == Buffering::Hold {
-      let mut rotation_state = 0u64;
+      let mut rotation_state: i8 = 0;
       if self.input.keys.rotate_ccw {
-        rotation_state -= 1;
+        rotation_state = rotation_state.wrapping_sub(1);
       }
       if self.input.keys.rotate_cw {
-        rotation_state += 1;
+        rotation_state = rotation_state.wrapping_add(1);
       }
       if self.input.keys.rotate_180 {
-        rotation_state += 2;
+        rotation_state = rotation_state.wrapping_add(2);
       }
-      self.falling.irs = rotation_state.rem_euclid(4) as u64;
+      self.falling.irs = rotation_state.rem_euclid(4) as i8;
     }
 
     if self.handling.ihs == Buffering::Hold && self.input.keys.hold && !is_hold {
@@ -900,26 +926,21 @@ impl Engine {
       self.hold_locked = false;
     }
 
-    let spawn_rot = {
-      let tables = &*KICK_TABLES;
-      if let Some(table) = tables.get(self.kick_table.as_str()) {
-        table
-          .spawn_rotation
-          .get(piece.as_str())
-          .copied()
-          .unwrap_or(0)
-      } else {
-        0
-      }
-    };
+    let spawn_rot = self
+      .kick_table
+      .data()
+      .spawn_rotation
+      .get(&piece.into())
+      .copied()
+      .unwrap_or(0);
 
     let previous = self.falling.snapshot();
 
     self.falling = Tetromino::new(TetrominoInitParams {
       symbol: piece,
       initial_rotation: spawn_rot,
-      board_height: self.board.height as u64,
-      board_width: self.board.width as u64,
+      board_height: self.board.height,
+      board_width: self.board.width,
       from: Some(previous),
     });
 
@@ -932,7 +953,7 @@ impl Engine {
         self.hold(false, ignore_blockout);
       } else {
         if self.falling.irs != 0 {
-          self.rotate(self.falling.irs as u64, true);
+          self.rotate(self.falling.irs as i32, true);
           self.falling.irs = 0;
         }
         if !self.consider_blockout(!ignore_blockout || is_hold) && self.is_20g() {
@@ -941,7 +962,7 @@ impl Engine {
       }
     }
 
-    self.events.push(EngineEvent::FallingNew { piece, is_hold });
+    self.events.emit(events::falling::New { piece, is_hold });
   }
 
   pub fn next_piece(&mut self, ignore_blockout: bool, is_hold: bool) {
@@ -973,8 +994,8 @@ impl Engine {
     true
   }
 
-  fn connect_blocks(&self, blocks: &[(u64, u64)]) -> Vec<(u64, u64, u8)> {
-    let exists = |x: u64, y: u64| blocks.iter().any(|&(bx, by)| bx == x && by == y);
+  fn connect_blocks(&self, blocks: &[(i32, i32)]) -> Vec<(i32, i32, u8)> {
+    let exists = |x: i32, y: i32| blocks.iter().any(|&(bx, by)| bx == x && by == y);
 
     blocks
       .iter()
@@ -1019,7 +1040,7 @@ impl Engine {
     };
 
     let blocks = self.falling.blocks();
-    let abs: Vec<(u64, u64)> = blocks
+    let abs: Vec<(i32, i32)> = blocks
       .iter()
       .map(|&(bx, by, _)| (bx + self.falling.x(), -by + self.falling.y() - 1))
       .collect();
@@ -1055,7 +1076,7 @@ impl Engine {
         }
       }
     } else {
-      let table_opt: Option<&[[(u64, u64); 4]; 4]> = if is_z {
+      let table_opt: Option<&[[(i32, i32); 4]; 4]> = if is_z {
         Some(&CORNER_TABLE_Z)
       } else if is_l {
         Some(&CORNER_TABLE_L)
@@ -1100,7 +1121,7 @@ impl Engine {
   fn spin_bonuses_mini(&self) -> bool {
     let rules = &*utils::kicks::SPIN_BONUS_RULES;
     rules
-      .get(self.game_options.spin_bonuses.as_str())
+      .get(&self.game_options.spin_bonuses)
       .map(|r| r.types_mini.contains(&self.falling.symbol.as_str()))
       .unwrap_or(false)
   }
@@ -1196,9 +1217,9 @@ impl Engine {
     self.hold_locked = false;
 
     let blocks = self.falling.blocks().to_vec();
-    let mut placed: Vec<(Mino, u64, u64)> = Vec::with_capacity(blocks.len());
-    let mut placed_pos: Vec<(u64, u64)> = Vec::with_capacity(blocks.len());
-    let mut connect_input: Vec<(u64, u64)> = Vec::with_capacity(blocks.len());
+    let mut placed: Vec<(Mino, i32, i32)> = Vec::with_capacity(blocks.len());
+    let mut placed_pos: Vec<(i32, i32)> = Vec::with_capacity(blocks.len());
+    let mut connect_input: Vec<(i32, i32)> = Vec::with_capacity(blocks.len());
 
     for &(bx, by, _) in &blocks {
       let x = self.falling.x() + bx;
@@ -1209,7 +1230,7 @@ impl Engine {
     }
 
     let connected = self.connect_blocks(&connect_input);
-    let board_add: Vec<(Tile, u64, u64)> = connected
+    let board_add: Vec<(Tile, i32, i32)> = connected
       .iter()
       .map(|&(cx, cy, cs)| {
         (
@@ -1231,7 +1252,7 @@ impl Engine {
 
     self.stats.garbage_cleared += garbage_cleared as u64;
 
-    let mut broke_b2b: Option<u64> = Some(self.stats.b2b);
+    let mut broke_b2b: Option<i32> = Some(self.stats.b2b);
     let last_spin = self.last_spin.unwrap_or(Spin::None);
 
     if lines > 0 {
@@ -1244,7 +1265,7 @@ impl Engine {
         broke_b2b = None;
       }
       if pc_b2b {
-        self.stats.b2b += self.pc.as_ref().unwrap().b2b;
+        self.stats.b2b += self.pc.as_ref().unwrap().b2b as i32;
         broke_b2b = None;
       }
       if broke_b2b.is_some() {
@@ -1258,15 +1279,15 @@ impl Engine {
     let special_bonus = self.garbage_queue.options().special_bonus
       && garbage_cleared > 0
       && (last_spin != Spin::None || lines >= 4);
-    let g_special_bonus: u64 = if special_bonus { 1 } else { 0 };
+    let g_special_bonus: u32 = if special_bonus { 1 } else { 0 };
 
-    let combo_table;
+    let combo_table = self.game_options.combo_table.clone();
 
     let calc_input = GarbageCalcInput {
       b2b: self.stats.b2b.max(0),
       combo: self.stats.combo.max(0),
       enemies: 0,
-      lines: lines as u64,
+      lines,
       piece: self.falling.symbol,
       spin: last_spin,
     };
@@ -1280,7 +1301,7 @@ impl Engine {
     let garbage_result = garbage_calc_v2(&calc_input, &calc_config);
 
     let garb_mult = self.dynamic.1.get();
-    let mut g_events: Vec<u64> = Vec::new();
+    let mut g_events: Vec<u32> = Vec::new();
     if garbage_result.garbage > 0.0 || g_special_bonus > 0 {
       let rounded = self
         .garbage_queue
@@ -1288,15 +1309,15 @@ impl Engine {
       g_events.push(rounded);
     }
 
-    let mut surged = 0;
+    let mut surged: u32 = 0;
     if let Some(btb) = broke_b2b {
       if let Some(charging) = &self.b2b.charging {
-        if btb + 1 > charging.at {
+        if (btb as i64 + 1) > charging.at as i64 {
           surged = ((btb as f64 - charging.at as f64 + charging.base as f64 + 1.0) * garb_mult)
-            .floor() as u64;
-          let g1 = (surged as f64 / 3.0).round() as u64;
-          let g2 = (surged as f64 / 3.0).round() as u64;
-          let g3 = surged - 2 * g1;
+            .floor() as u32;
+          let g1 = (surged as f64 / 3.0).round() as u32;
+          let g2 = (surged as f64 / 3.0).round() as u32;
+          let g3 = surged.saturating_sub(2 * g1);
           g_events.splice(0..0, [g1, g2, g3]);
         }
       }
@@ -1309,11 +1330,11 @@ impl Engine {
       }
     }
 
-    let mut filtered_garbage: Vec<u64> = g_events.into_iter().filter(|&g| g > 0).collect();
+    let mut filtered_garbage: Vec<u32> = g_events.into_iter().filter(|&g| g > 0).collect();
     let raw_garbage = filtered_garbage.clone();
 
     for &g in &raw_garbage {
-      self.stats.garbage_attack += g;
+      self.stats.garbage_attack += g as u64;
     }
 
     let mut garbage_added: Option<Vec<OutgoingGarbage>> = None;
@@ -1343,7 +1364,7 @@ impl Engine {
             .cancel(filtered_garbage[i], self.stats.pieces, legacy_opener);
 
         for c in &cancelled {
-          self.events.push(EngineEvent::GarbageCancel {
+          self.events.emit(events::garbage::Cancel {
             iid: c.cid,
             amount: c.amount,
             size: c.size,
@@ -1368,14 +1389,14 @@ impl Engine {
           let is_end = idx == garbages.len() - 1 || garbages[idx + 1].id != g.id;
           let bomb_opt = self.garbage_queue.options().bombs;
           self.board.insert_garbage(InsertGarbageParams {
-            amount: g.amount as usize,
+            amount: g.amount,
             size: g.size,
             column: g.column,
             bombs: bomb_opt,
             is_beginning: is_beg,
             is_end,
           });
-          self.events.push(EngineEvent::GarbageTank {
+          self.events.emit(events::garbage::Tank {
             iid: g.id,
             column: g.column,
             amount: g.amount,
@@ -1395,7 +1416,7 @@ impl Engine {
       !legal(&abs, &self.board.state)
     };
 
-    let sent_total: u64 = filtered_garbage.iter().sum();
+    let sent_total: u32 = filtered_garbage.iter().sum();
 
     if !filtered_garbage.is_empty() {
       if let Some(mp) = &self.multiplayer {
@@ -1407,7 +1428,7 @@ impl Engine {
       }
     }
 
-    self.stats.garbage_sent += sent_total;
+    self.stats.garbage_sent += sent_total as u64;
 
     if sent_total > 0 {
       self.spike.count += sent_total;
@@ -1443,7 +1464,7 @@ impl Engine {
       key_presses: Vec::new(),
     };
 
-    self.events.push(EngineEvent::FallingLock(result.clone()));
+    self.events.emit(events::falling::Lock(result.clone()));
     result
   }
 
@@ -1697,14 +1718,15 @@ impl Engine {
     self.garbage_queue.receive(garbages);
   }
 
-  pub fn tick(&mut self, frames: &[Frame]) -> ResCache {
+  pub fn tick(&mut self, frames: &[replay::Frame]) -> ResCache {
     self.subframe = 0.0;
 
     for frame in frames {
-      match frame {
-        ReplayFrame::Keydown(event) => self.handle_keydown(event),
-        ReplayFrame::Keyup(event) => self.handle_keyup(event),
-        ReplayFrame::Ige(ige) => self.handle_ige(ige),
+      match &frame.data {
+        replay::FrameData::KeyDown(kp) => self.handle_keydown(kp),
+        replay::FrameData::KeyUp(kp) => self.handle_keyup(kp),
+        replay::FrameData::IGE(ige) => self.handle_ige(ige),
+        _ => {}
       }
     }
 
@@ -1721,18 +1743,18 @@ impl Engine {
     self.flush_res()
   }
 
-  fn handle_keydown(&mut self, event: &KeyEvent) {
-    self.process_subframe(event.subframe);
-    self.res_cache.keys.push(event.key.clone());
+  fn handle_keydown(&mut self, keypress: &replay::Keypress) {
+    self.process_subframe(keypress.subframe);
+    self.res_cache.keys.push(keypress.key.as_str().to_string());
 
-    match event.key.as_str() {
-      "moveLeft" => {
+    match keypress.key {
+      Key::MoveLeft => {
         self.falling.keys += 1;
         if self.input.first_input_time < 0.0 {
           self.input.first_input_time = self.frame as f64 + self.subframe;
         }
         self.input.l_shift.held = true;
-        self.input.l_shift.das = if event.hoisted {
+        self.input.l_shift.das = if keypress.hoisted {
           self.handling.das - self.handling.dcd
         } else {
           0.0
@@ -1741,13 +1763,13 @@ impl Engine {
         self.input.last_shift = self.input.l_shift.dir;
         self.internal_shift();
       }
-      "moveRight" => {
+      Key::MoveRight => {
         self.falling.keys += 1;
         if self.input.first_input_time < 0.0 {
           self.input.first_input_time = self.frame as f64 + self.subframe;
         }
         self.input.r_shift.held = true;
-        self.input.r_shift.das = if event.hoisted {
+        self.input.r_shift.das = if keypress.hoisted {
           self.handling.das - self.handling.dcd
         } else {
           0.0
@@ -1756,39 +1778,39 @@ impl Engine {
         self.input.last_shift = self.input.r_shift.dir;
         self.internal_shift();
       }
-      "softDrop" => {
+      Key::SoftDrop => {
         self.input.keys.soft_drop = true;
         if self.input.first_input_time < 0.0 {
           self.input.first_input_time = self.frame as f64 + self.subframe;
         }
       }
-      "retry" => {
+      Key::Retry => {
         self.practice.retry = true;
         self.practice.retry_iter = 0;
       }
-      "undo" => {
+      Key::Undo => {
         self.undo();
       }
-      "redo" => {
+      Key::Redo => {
         self.redo();
       }
-      "rotateCCW" => {
+      Key::RotateCCW => {
         self.input.keys.rotate_ccw = true;
         if self.input.first_input_time < 0.0 {
           self.input.first_input_time = self.frame as f64 + self.subframe;
         }
-        let r = self.rotate(-1, false);
+        self.rotate(-1, false);
         self.falling.keys += 1;
       }
-      "rotateCW" => {
+      Key::RotateCW => {
         self.input.keys.rotate_cw = true;
         if self.input.first_input_time < 0.0 {
           self.input.first_input_time = self.frame as f64 + self.subframe;
         }
-        let r = self.rotate(1, false);
+        self.rotate(1, false);
         self.falling.keys += 1;
       }
-      "rotate180" => {
+      Key::Rotate180 => {
         if !self.misc.allowed.spin180 {
           return;
         }
@@ -1796,27 +1818,26 @@ impl Engine {
         if self.input.first_input_time < 0.0 {
           self.input.first_input_time = self.frame as f64 + self.subframe;
         }
-        let r = self.rotate(2, false);
+        self.rotate(2, false);
         self.falling.keys += 2;
       }
-      "hardDrop" => {
+      Key::HardDrop => {
         if !self.misc.allowed.hard_drop || self.falling.safe_lock != 0 {
           return;
         }
         self.hard_drop();
       }
-      "hold" => {
+      Key::Hold => {
         self.input.keys.hold = true;
         self.hold(false, false);
       }
-      _ => {}
     }
   }
 
-  fn handle_keyup(&mut self, event: &KeyEvent) {
-    self.process_subframe(event.subframe);
-    match event.key.as_str() {
-      "moveLeft" => {
+  fn handle_keyup(&mut self, keypress: &replay::Keypress) {
+    self.process_subframe(keypress.subframe);
+    match keypress.key {
+      Key::MoveLeft => {
         self.input.l_shift.held = false;
         self.input.l_shift.das = 0.0;
         self.input.last_shift = if self.input.r_shift.held {
@@ -1829,7 +1850,7 @@ impl Engine {
           self.input.r_shift.das = 0.0;
         }
       }
-      "moveRight" => {
+      Key::MoveRight => {
         self.input.r_shift.held = false;
         self.input.r_shift.das = 0.0;
         self.input.last_shift = if self.input.l_shift.held {
@@ -1842,33 +1863,33 @@ impl Engine {
           self.input.l_shift.das = 0.0;
         }
       }
-      "softDrop" => {
+      Key::SoftDrop => {
         self.state |= ACTION_SOFTDROP;
         self.input.keys.soft_drop = false;
       }
-      "retry" => {
+      Key::Retry => {
         self.practice.retry = false;
         self.practice.retry_iter = 0;
       }
-      "rotateCCW" => {
+      Key::RotateCCW => {
         self.input.keys.rotate_ccw = false;
       }
-      "rotateCW" => {
+      Key::RotateCW => {
         self.input.keys.rotate_cw = false;
       }
-      "rotate180" => {
+      Key::Rotate180 => {
         self.input.keys.rotate_180 = false;
       }
-      "hold" => {
+      Key::Hold => {
         self.input.keys.hold = false;
       }
       _ => {}
     }
   }
 
-  fn handle_ige(&mut self, ige: ige::IGE, frame: u64) {
+  fn handle_ige(&mut self, ige: &ige::IGE) {
     match &ige.data {
-      &ige::IGEData::Interaction(interaction) => match interaction {
+      ige::IGEData::Interaction(interaction) => match interaction {
         ige::interaction::InteractionData::Garbage(data) => {
           let ige::interaction::Garbage {
             gameid,
@@ -1878,29 +1899,31 @@ impl Engine {
             size,
             ..
           } = data;
-          let original = amt;
+          let original = *amt as u32;
           let amount = if self
             .multiplayer
             .as_ref()
             .map(|m| m.passthrough_network)
             .unwrap_or(false)
           {
-            self.ige_handler.receive(gameid, ackiid, iid, amt)
+            self
+              .ige_handler
+              .receive(*gameid, *ackiid, *iid, *amt as u32)
           } else {
-            amt
+            *amt as u32
           };
           let gf = u64::MAX / 2 - self.garbage_queue.options().garbage.speed;
           self.receive_garbage(vec![IncomingGarbage {
             frame: gf,
             amount,
-            size: size,
-            cid: iid,
-            gameid: gameid,
+            size: *size as usize,
+            cid: *iid,
+            gameid: *gameid,
             confirmed: false,
           }]);
-          self.stats.garbage_receive += amount;
+          self.stats.garbage_receive += amount as u64;
           self.events.emit(events::garbage::Receive {
-            iid: iid,
+            iid: *iid,
             amount,
             original_amount: original,
           });
@@ -1908,30 +1931,24 @@ impl Engine {
         _ => {}
       },
 
-      &ige::IGEData::InteractionConfirm(interaction) => match interaction {
+      ige::IGEData::InteractionConfirm(interaction) => match interaction {
         ige::interaction::InteractionData::Garbage(data) => {
-          let ige::interaction::Garbage {
-            gameid,
-            ackiid,
-            iid,
-            amt,
-            size,
-            ..
-          } = data;
-          self.garbage_queue.confirm(iid, gameid, frame);
+          let ige::interaction::Garbage { gameid, iid, .. } = data;
+          self.garbage_queue.confirm(*iid, *gameid, self.frame);
           self.events.emit(events::garbage::Confirm {
-            iid: iid,
-            gameid: gameid,
-            frame: frame,
+            iid: *iid,
+            gameid: *gameid,
+            frame: self.frame,
           });
         }
         _ => {}
       },
-      IgeData::Target { targets } => {
+      ige::IGEData::Target(data) => {
         if let Some(mp) = &mut self.multiplayer {
-          mp.targets = targets.clone();
+          mp.targets = data.targets.clone();
         }
       }
+      _ => {}
     }
   }
 
@@ -1981,14 +1998,6 @@ impl Engine {
     let is_undo_redo = snapshot.is_undo_redo;
 
     self.board.state = snapshot.board.clone();
-
-    let spawn_rot = self
-      .kick_table
-      .data()
-      .spawn_rotation
-      .get(snapshot.falling.symbol.as_str())
-      .copied()
-      .unwrap_or(0);
 
     self.falling = Tetromino::from_snapshot(&snapshot.falling, self.board.height, self.board.width);
 
