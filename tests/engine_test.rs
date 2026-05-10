@@ -12,7 +12,7 @@ use triangle::engine::{
     MultiplierParams, RoundingMode,
   },
   queue::{QueueInitParams, bag::BagType},
-  utils::{KickTable, kicks::legal},
+  utils::KickTable,
 };
 use triangle::types::game::{
   Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Key, SpinBonuses, ige,
@@ -62,7 +62,8 @@ fn make_unpacker() -> Unpacker {
 fn process_file(file: PathBuf) -> Result<(), String> {
   let unpacker = make_unpacker();
 
-  let bytes = fs::read(&file).map_err(|e| format!("Failed to read replay file {}: {e}", file.display()))?;
+  let bytes =
+    fs::read(&file).map_err(|e| format!("Failed to read replay file {}: {e}", file.display()))?;
   let replay_doc = unpacker
     .unpack(&bytes)
     .map_err(|e| format!("Failed to parse replay file {}: {e}", file.display()))?;
@@ -383,8 +384,16 @@ fn run_through(round: &ReplayRound) -> bool {
     let frame_index = engine.frame as usize;
     engine.tick(&frames[frame_index]);
 
+    // if engine.frame.is_multiple_of(30) {
+    //   println!(
+    //     "Frame {}",
+    // 		engine.frame
+    //   );
 
-    if engine.topped_out() 	 && (engine.frame as usize) < frames.len().saturating_sub(10) {
+    // 	engine.print();
+    // }
+
+    if engine.topped_out() && (engine.frame as usize) < frames.len().saturating_sub(10) {
       return false;
     }
   }

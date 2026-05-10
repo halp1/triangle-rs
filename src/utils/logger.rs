@@ -31,7 +31,9 @@ impl Logger {
   }
 
   fn cols() -> usize {
-    terminal_size().map(|(Width(w), _)| w as usize).unwrap_or(80)
+    terminal_size()
+      .map(|(Width(w), _)| w as usize)
+      .unwrap_or(80)
   }
 
   fn print_line(&mut self, colored_prefix: String, message: &str) {

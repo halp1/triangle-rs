@@ -1,6 +1,5 @@
 use super::{
- GarbageQueueInitParams, GarbageQueueSnapshot, IncomingGarbage, OutgoingGarbage,
-  RoundingMode,
+  GarbageQueueInitParams, GarbageQueueSnapshot, IncomingGarbage, OutgoingGarbage, RoundingMode,
 };
 use crate::engine::utils::rng::Rng;
 
@@ -39,7 +38,10 @@ impl LegacyGarbageQueue {
   }
 
   fn internal_reroll_column(&self, current: Option<usize>, rng: &mut Rng) -> usize {
-    let cols = column_width(self.options.board_width, self.options.garbage.hole_size as usize);
+    let cols = column_width(
+      self.options.board_width,
+      self.options.garbage.hole_size as usize,
+    );
     if self.options.messiness.nosame && current.is_some() {
       let lc = current.unwrap();
       let mut col = (rng.next_float() * (cols - 1) as f64) as usize;
@@ -56,7 +58,10 @@ impl LegacyGarbageQueue {
     let lc = self.last_column;
     let col: usize = {
       let rng = &mut self.rng;
-      let cols = column_width(self.options.board_width, self.options.garbage.hole_size as usize);
+      let cols = column_width(
+        self.options.board_width,
+        self.options.garbage.hole_size as usize,
+      );
       if self.options.messiness.nosame && lc.is_some() {
         let c = lc.unwrap();
         let mut v = (rng.next_float() * (cols - 1) as f64) as usize;
@@ -308,6 +313,7 @@ impl LegacyGarbageQueue {
     );
     res
   }
+
 
   pub fn round(&mut self, amount: f64) -> u32 {
     match self.options.rounding {

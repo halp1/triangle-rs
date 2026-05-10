@@ -120,7 +120,10 @@ impl GarbageQueue {
   }
 
   fn column_width(&self) -> usize {
-    self.options.board_width.saturating_sub(self.options.garbage.hole_size as usize - 1)
+    self
+      .options
+      .board_width
+      .saturating_sub(self.options.garbage.hole_size as usize - 1)
   }
 
   fn reroll_column(&mut self) -> usize {

@@ -29,16 +29,16 @@ pub mod bracket {
   event!(room.bracket.switch => Switch(Bracket));
 
   event!(room.bracket.move => Move {
-		uid: String,
-		bracket: Bracket,
+    uid: String,
+    bracket: Bracket,
   });
 }
 
 pub mod owner {
-	use crate::macros::event;
+  use crate::macros::event;
 
-	event!(room.owner.transfer => Transfer(String));
-	event!(room.owner.revoke => Revoke);
+  event!(room.owner.transfer => Transfer(String));
+  event!(room.owner.revoke => Revoke);
 }
 
 event!(room.start => Start);

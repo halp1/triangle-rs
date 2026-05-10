@@ -8,13 +8,13 @@ use crate::{
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Ready {
-	pub players: Vec<game::ReadyPlayer>,
-	#[serde(rename = "isNew")]
-	pub is_new: bool,
+  pub players: Vec<game::ReadyPlayer>,
+  #[serde(rename = "isNew")]
+  pub is_new: bool,
 }
 
 impl Event for Ready {
-	const NAME: &'static str = "game.ready";
+  const NAME: &'static str = "game.ready";
 }
 
 event!(game.abort => Abort);

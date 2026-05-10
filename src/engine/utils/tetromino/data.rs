@@ -41,10 +41,10 @@ pub enum MinoExt {
   J,
   T,
   OO,
-	G,
-	D,
-	GB,
-	GBD
+  G,
+  D,
+  GB,
+  GBD,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -64,7 +64,7 @@ pub enum MinoColor {
 
 impl MinoExt {
   pub fn as_str(&self) -> &'static str {
-		use MinoExt::*;
+    use MinoExt::*;
     match self {
       I1 => "i1",
       I2 => "i2",
@@ -78,11 +78,11 @@ impl MinoExt {
       I => "i",
       J => "j",
       T => "t",
-			G => "g",
+      G => "g",
       OO => "oo",
-			D => "d",
-			GB => "gb",
-			GBD => "gbd",
+      D => "d",
+      GB => "gb",
+      GBD => "gbd",
     }
   }
 

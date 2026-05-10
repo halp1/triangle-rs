@@ -999,9 +999,18 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       .collect(),
       color_map: color_map_standard(),
       preview_overrides: [
-        (MinoExt::L, vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)]),
-        (MinoExt::J, vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)]),
-        (MinoExt::T, vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)]),
+        (
+          MinoExt::L,
+          vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)],
+        ),
+        (
+          MinoExt::J,
+          vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)],
+        ),
+        (
+          MinoExt::T,
+          vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)],
+        ),
       ]
       .into_iter()
       .collect(),
@@ -1074,9 +1083,18 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
       .into_iter()
       .collect(),
       preview_overrides: [
-        (MinoExt::L, vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)]),
-        (MinoExt::J, vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)]),
-        (MinoExt::T, vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)]),
+        (
+          MinoExt::L,
+          vec![(0, 0, 201), (1, 0, 68), (2, 0, 124), (0, 1, 31)],
+        ),
+        (
+          MinoExt::J,
+          vec![(0, 0, 199), (1, 0, 68), (2, 0, 114), (2, 1, 31)],
+        ),
+        (
+          MinoExt::T,
+          vec![(0, 0, 199), (1, 0, 74), (2, 0, 124), (1, 1, 31)],
+        ),
       ]
       .into_iter()
       .collect(),

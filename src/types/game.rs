@@ -105,12 +105,12 @@ pub enum SpinBonuses {
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Spin {
-	#[serde(rename = "none")]
-	None,
-	#[serde(rename = "mini")]
-	Mini,
-	#[serde(rename = "normal")]
-	Normal,
+  #[serde(rename = "none")]
+  None,
+  #[serde(rename = "mini")]
+  Mini,
+  #[serde(rename = "normal")]
+  Normal,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -157,14 +157,14 @@ pub enum ComboTable {
 }
 
 impl ComboTable {
-	pub fn data(&self) -> &'static [f64] {
-		match self {
-			ComboTable::None => &[0.0],
-			ComboTable::Multiplier => panic!("Multiplier combo table does not have predefined data"),
-			ComboTable::ClassicGuideline => &[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
-			ComboTable::ModernGuideline => &[0.0, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
-		}
-	}
+  pub fn data(&self) -> &'static [f64] {
+    match self {
+      ComboTable::None => &[0.0],
+      ComboTable::Multiplier => panic!("Multiplier combo table does not have predefined data"),
+      ComboTable::ClassicGuideline => &[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+      ComboTable::ModernGuideline => &[0.0, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
+    }
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -197,9 +197,9 @@ pub enum GameOverReason {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Buffering {
-	Off,
-	Hold,
-	Tap
+  Off,
+  Hold,
+  Tap,
 }
 
 /// Handling settings sent within `server.authorize`.
@@ -215,8 +215,6 @@ pub struct Handling {
   pub irs: Buffering,
   pub ihs: Buffering,
 }
-
-
 
 impl Default for Handling {
   fn default() -> Self {
@@ -768,4 +766,11 @@ pub mod tick {
       f.debug_tuple("Ticker").finish()
     }
   }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpectateTarget {
+  GameIds(Vec<u64>),
+  UserIds(Vec<String>),
+  All,
 }

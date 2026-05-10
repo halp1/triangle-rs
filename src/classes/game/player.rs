@@ -51,7 +51,7 @@ impl Player {
 
     let state = Arc::new(Mutex::new(PlayerState {
       // engine: Game::create_engine(me.options, me.gameid, players),
-			engine: unimplemented!(), // TODO: implement
+      engine: unimplemented!(), // TODO: implement
       state: SpectatingState::Inactive,
       queue: Vec::new(),
       strategy,
@@ -210,23 +210,37 @@ impl Player {
           self.tick_once(&mut state);
         }
       }
-			SpectatingStrategy::Smooth => {
-				if state.queue.is_empty() {
-					return;
-				}
+      SpectatingStrategy::Smooth => {
+        if state.queue.is_empty() {
+          return;
+        }
 
-				let last_frame = state.queue.last().unwrap().frame;
+        let last_frame = state.queue.last().unwrap().frame;
 
-				if state.engine.frame < last_frame - 20 {
-					while state.queue.iter().any(|frame| frame.frame > state.engine.frame) && state.engine.frame < last_frame - 20 {
-						self.tick_once(&mut state);
-					}
-				}
+        if state.engine.frame < last_frame - 20 {
+          while state
+            .queue
+            .iter()
+            .any(|frame| frame.frame > state.engine.frame)
+            && state.engine.frame < last_frame - 20
+          {
+            self.tick_once(&mut state);
+          }
+        }
 
-				if state.queue.iter().any(|frame| frame.frame > state.engine.frame) {
-					self.tick_once(&mut state);
-				}
-			}
+        if state
+          .queue
+          .iter()
+          .any(|frame| frame.frame > state.engine.frame)
+        {
+          self.tick_once(&mut state);
+        }
+      }
     };
   }
+
+	pub async fn _set_strategy(&self, strategy: SpectatingStrategy) {
+		let mut state = self.state.lock().await;
+		state.strategy = strategy;
+	}
 }

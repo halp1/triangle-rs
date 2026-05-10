@@ -23,7 +23,7 @@ use crate::{
 pub const MAX_IGE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const FRAMES_PER_MESSAGE: u64 = 12;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MeState {
   frame_queue: Vec<replay::Frame>,
   /// (frame, ige)
@@ -48,7 +48,7 @@ pub struct MeState {
   pub last_ige_flush: Instant,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Me {
   ribbon: Ribbon,
   hook: Hook,
@@ -63,6 +63,7 @@ pub struct Me {
   pub tick: tick::Ticker,
 }
 
+
 impl Me {
   pub fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
     let self_player = players
@@ -76,7 +77,7 @@ impl Me {
     let s = Self {
       ribbon: ribbon.clone(),
       hook: ribbon.hook(),
-			logger: Logger::new("triangle-rs"),
+      logger: Logger::new("triangle-rs"),
       me,
       handles: Arc::new(Mutex::new(Vec::new())),
       start_hook: Arc::new(Mutex::new(Some(start_hook_tx))),
@@ -126,7 +127,7 @@ impl Me {
 
     state.over = true;
     // state.engine.events.clear();
-		// TODO: clear engine events
+    // TODO: clear engine events
 
     let mut handles = self.handles.lock().await;
     for handle in handles.drain(..) {
@@ -276,7 +277,7 @@ impl Me {
 
       let mut keys = Vec::new();
 
-			let frame = state.engine.frame;
+      let frame = state.engine.frame;
 
       state.key_queue.retain(|key| {
         if key.frame == frame {
@@ -322,7 +323,7 @@ impl Me {
     };
 
     if frame != 0 && frame % FRAMES_PER_MESSAGE == 0 {
-			let frames = self.flush_frames().await;
+      let frames = self.flush_frames().await;
       self
         .ribbon
         .emit(send::game::Replay {

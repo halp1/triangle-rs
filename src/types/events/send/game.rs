@@ -10,7 +10,7 @@ pub mod scope {
 event!(game.spectate => Spectate);
 
 event!(game.replay => Replay {
-	gameid: u64,
-	provisioned: u64,
-	frames: Vec<Frame>,
+  gameid: u64,
+  provisioned: u64,
+  frames: Vec<Frame>,
 });

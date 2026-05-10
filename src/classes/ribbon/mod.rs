@@ -1110,6 +1110,15 @@ impl Ribbon {
     }
   }
 
+	pub async fn set_faster_ping(&self, value: bool) {
+		let mut state = self.state.lock().await;
+		if value {
+			state.flags |= Flags::FAST_PING;
+		} else {
+			state.flags &= !Flags::FAST_PING;
+		}
+	}
+
   pub async fn wait<T: Event>(&self) -> Option<T> {
     self.emitter.wait::<T>().await
   }
@@ -1146,11 +1155,12 @@ impl Ribbon {
     let ribbon = self.clone();
     self
       .emitter
-      .wrap_with_error::<T>(async move { ribbon.emit_raw(&cmd, data).await }, error_events)
+      .wrap_with_error::<T>(
+        async move { ribbon.emit_raw(&cmd, data).await },
+        error_events,
+      )
       .await
   }
 
-	pub async fn destroy(&self) {
-		
-	}
+  pub async fn destroy(&self) {}
 }

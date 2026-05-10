@@ -305,6 +305,13 @@ impl GarbageQueueVariant {
       Self::Legacy(q) => &q.options,
     }
   }
+
+  pub fn size(&self) -> u32 {
+    match self {
+      Self::New(q) => q.size(),
+      Self::Legacy(q) => q.size(),
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -1341,10 +1348,9 @@ impl Engine {
 
     if lines > 0 {
       self.last_was_clear = true;
-      let mut i = 0;
-      while i < filtered_garbage.len() {
-        if filtered_garbage[i] == 0 {
-          filtered_garbage.remove(i);
+      while !filtered_garbage.is_empty() {
+        if *filtered_garbage.first().unwrap() == 0 {
+          filtered_garbage.remove(0);
           continue;
         }
 
@@ -1361,7 +1367,7 @@ impl Engine {
         let (remaining, cancelled) =
           self
             .garbage_queue
-            .cancel(filtered_garbage[i], self.stats.pieces, legacy_opener);
+            .cancel(filtered_garbage[0], self.stats.pieces, legacy_opener);
 
         for c in &cancelled {
           self.events.emit(events::garbage::Cancel {
@@ -1372,9 +1378,9 @@ impl Engine {
         }
 
         if remaining == 0 {
-          filtered_garbage.remove(i);
+          filtered_garbage.remove(0);
         } else {
-          filtered_garbage[i] = remaining;
+          filtered_garbage[0] = remaining;
           break;
         }
       }
@@ -2091,6 +2097,89 @@ impl Engine {
 
   pub fn get_preview(&self, piece: Mino) -> &utils::tetromino::data::PreviewData {
     MinoExt::from(piece).preview()
+  }
+
+  // get text() {
+  //   const boardTop = this.board.state.findIndex((row: Tile[]) =>
+  //     row.every((block) => block === null)
+  //   );
+  //   const height = Math.max(this.garbageQueue.size, boardTop, 0);
+
+  //   const output: string[] = [];
+  //   for (let i = 0; i < height; i++) {
+  //     let str = i % 2 === 0 ? "|" : " ";
+  //     if (i < this.garbageQueue.size) str += " " + chalk.bgRed(" ") + " ";
+  //     else str += "   ";
+  //     if (i > boardTop) {
+  //       output.push(
+  //         str + "  ".repeat(this.board.width) + " " + (i % 2 === 0 ? "|" : " ")
+  //       );
+  //       continue;
+  //     }
+
+  //     for (let j = 0; j < this.board.width; j++) {
+  //       const block = this.board.state[i][j];
+  //       str += block ? Engine.colorMap[block.mino]("  ") : "  ";
+  //     }
+
+  //     output.push(str + " " + (i % 2 === 0 ? "|" : " "));
+  //   }
+
+  //   return output.reverse().join("\n");
+  // }
+
+  pub fn print(&self) {
+    use colored::Colorize;
+
+    let board_top = self
+      .board
+      .state
+      .iter()
+      .position(|row| row.iter().all(|block| block.is_none()))
+      .unwrap_or(0);
+    let height = self
+      .board
+      .height
+      .max(self.garbage_queue.size() as usize)
+      .max(board_top);
+
+    for i in (0..height).rev() {
+      let mut line = String::new();
+      line.push_str(if i % 2 == 0 { "|" } else { " " });
+      if i < self.garbage_queue.size() as usize {
+        line.push_str(&format!(" {} ", " ".on_red()));
+      } else {
+        line.push_str("   ");
+      }
+      if i >= board_top {
+        line.push_str(&"  ".repeat(self.board.width));
+        line.push_str(if i % 2 == 0 { "|" } else { " " });
+        println!("{}", line);
+        continue;
+      }
+
+      for j in 0..self.board.width {
+        let block = &self.board.state[i][j];
+        if let Some(block) = block {
+          let colored = match block.mino {
+            Mino::I => "  ".on_truecolor(0, 240, 240),
+            Mino::J => "  ".on_truecolor(0, 114, 188),
+            Mino::L => "  ".on_truecolor(240, 160, 0),
+            Mino::O => "  ".on_truecolor(240, 240, 0),
+            Mino::S => "  ".on_truecolor(0, 240, 0),
+            Mino::T => "  ".on_truecolor(160, 0, 240),
+            Mino::Z => "  ".on_truecolor(240, 0, 0),
+            Mino::Garbage => "  ".on_bright_black(),
+            Mino::Bomb => "  ".on_truecolor(255, 165, 0),
+          };
+          line.push_str(&colored.to_string());
+        } else {
+          line.push_str("  ");
+        }
+      }
+      line.push_str(if i % 2 == 0 { "|" } else { " " });
+      println!("{}", line);
+    }
   }
 }
 
