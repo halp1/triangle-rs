@@ -1,5 +1,9 @@
 use crate::macros::event;
 
+event!(room.join => Join(String));
+
+event!(room.create => Create(bool));
+
 event!(room.leave => Leave);
 event!(room.kick => Kick {
   uid: String,

@@ -39,7 +39,7 @@ impl<'de> Deserializer<'de> for MsgpackDeserializer {
         (Value::Str("type_code".into()), Value::Int(type_code as i64)),
         (Value::Str("data".into()), Value::Bin(data)),
       ])),
-      other => visitor.visit_unit(),
+      _ => visitor.visit_unit(),
     }
   }
 

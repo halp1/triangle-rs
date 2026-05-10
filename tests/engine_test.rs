@@ -14,6 +14,7 @@ use triangle::engine::{
   queue::{QueueInitParams, bag::BagType},
   utils::KickTable,
 };
+use triangle::types::game::Passthrough;
 use triangle::types::game::{
   Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Key, SpinBonuses, ige,
   replay::{Frame, FrameData, Keypress},
@@ -371,7 +372,12 @@ fn convert_round(
     },
     multiplayer: Some(MultiplayerOptions {
       opponents: opponents.iter().map(|&x| x as u64).collect(),
-      passthrough: get_string(options, "passthrough", "zero"),
+      passthrough: parse_serde_enum(
+        get_optional_string(options, "passthrough")
+          .as_deref()
+          .unwrap_or("zero"),
+        Passthrough::Zero,
+      ),
     }),
   }
 }

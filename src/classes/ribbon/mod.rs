@@ -465,7 +465,7 @@ impl Ribbon {
             .await;
         }
 
-        let mut ribbon = self.clone();
+        let ribbon = self.clone();
 
         self
           .reconnect_state
@@ -1008,7 +1008,7 @@ impl Ribbon {
             _ => {}
           }
 
-          let decoded = ribbon.config.lock().await.transport.decode(match msg {
+          let decoded = ribbon.decode(match msg {
             Message::Text(ref s) => s.as_bytes(),
             Message::Binary(ref b) => b,
             _ => {
@@ -1021,7 +1021,7 @@ impl Ribbon {
                 .await;
               continue;
             } // ignore other message types
-          });
+          }).await;
 
           {
             let mut state = ribbon.state.lock().await;

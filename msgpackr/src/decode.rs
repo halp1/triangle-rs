@@ -32,7 +32,6 @@ struct ReferenceMap {
 #[derive(Clone)]
 struct RefEntry {
   value: Value,
-  used: bool,
 }
 
 impl ReferenceMap {
@@ -42,21 +41,10 @@ impl ReferenceMap {
     }
   }
   fn insert(&mut self, id: u32, val: Value) {
-    self.entries.insert(
-      id,
-      RefEntry {
-        value: val,
-        used: false,
-      },
-    );
+    self.entries.insert(id, RefEntry { value: val });
   }
   fn get(&self, id: u32) -> Option<&Value> {
     self.entries.get(&id).map(|e| &e.value)
-  }
-  fn mark_used(&mut self, id: u32) {
-    if let Some(e) = self.entries.get_mut(&id) {
-      e.used = true;
-    }
   }
 }
 
@@ -213,14 +201,7 @@ impl<'a> Decoder<'a> {
   ) -> Result<Value> {
     let id = if let Some(high) = second_byte {
       let low = first_byte & 0x3f;
-      if low < 32 {
-        // Two-byte negative ID for records with IDs requiring high byte
-        let combined_id = (high as usize) * 32 + (low as usize);
-        combined_id
-      } else {
-        let combined_id = (high as usize) * 32 + (low as usize);
-        combined_id
-      }
+      (high as usize) * 32 + (low as usize)
     } else {
       (first_byte & 0x3f) as usize
     };
@@ -312,7 +293,7 @@ impl<'a> Decoder<'a> {
         self.pos = end;
         let data = self.read(opts)?;
         match data {
-          Value::Array(mut arr) => {
+          Value::Array(arr) => {
             let cause = arr.get(2).cloned().and_then(|v| {
               if v == Value::Nil {
                 None
@@ -325,7 +306,7 @@ impl<'a> Decoder<'a> {
               .and_then(|v| v.as_str().map(|s| s.to_owned()))
               .unwrap_or_default();
             let name = arr
-              .get(0)
+              .first()
               .and_then(|v| v.as_str().map(|s| s.to_owned()))
               .unwrap_or_else(|| "Error".to_owned());
             Ok(Value::MsgpackError {
@@ -343,7 +324,7 @@ impl<'a> Decoder<'a> {
         match data {
           Value::Array(arr) => {
             let source = arr
-              .get(0)
+              .first()
               .and_then(|v| v.as_str().map(|s| s.to_owned()))
               .unwrap_or_default();
             let flags = arr
@@ -787,10 +768,7 @@ impl<'a> Decoder<'a> {
       }
     }
 
-    Err(Error::invalid(format!(
-      "Unreachable token: 0x{:02x}",
-      token
-    )))
+    unreachable!()
   }
 
   /// Re-dispatch already-peeked ext data by type code.
@@ -827,7 +805,7 @@ impl<'a> Decoder<'a> {
         self.pos = end;
         let data = self.read(opts)?;
         match data {
-          Value::Array(mut arr) => {
+          Value::Array(arr) => {
             let cause = arr.get(2).cloned().and_then(|v| {
               if v == Value::Nil {
                 None
@@ -840,7 +818,7 @@ impl<'a> Decoder<'a> {
               .and_then(|v| v.as_str().map(|s| s.to_owned()))
               .unwrap_or_default();
             let name = arr
-              .get(0)
+              .first()
               .and_then(|v| v.as_str().map(|s| s.to_owned()))
               .unwrap_or_else(|| "Error".to_owned());
             Ok(Value::MsgpackError {
@@ -858,7 +836,7 @@ impl<'a> Decoder<'a> {
         match data {
           Value::Array(arr) => {
             let source = arr
-              .get(0)
+              .first()
               .and_then(|v| v.as_str().map(|s| s.to_owned()))
               .unwrap_or_default();
             let flags = arr

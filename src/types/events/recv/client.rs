@@ -30,7 +30,15 @@ pub mod game {
   use crate::{types::game::ReplayEndData, utils::events::Event};
 
   use super::*;
-  // TODO: client.game.start
+
+  // players: (id, username)
+  event!(client.game.start => Start {
+    multi: bool,
+    first_to: u32,
+    win_by: u32,
+    golden_point: u32,
+    players: Vec<(String, String)>,
+  });
 
   #[derive(Debug, Clone, Serialize, Deserialize)]
   pub enum Over {
@@ -57,6 +65,29 @@ pub mod game {
   }
 
   event!(client.game.abort => Abort);
+
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  pub struct EndPlayer {
+    pub id: String,
+    pub name: String,
+    pub points: i64,
+    pub won: bool,
+    pub lifetime: Option<i64>,
+    pub raw: serde_json::Value,
+  }
+
+  #[derive(Debug, Clone, Serialize, Deserialize)]
+  #[serde(rename_all = "lowercase")]
+  pub enum EndSource {
+    Scoreboard,
+    Leaderboard,
+  }
+
+  event!(client.game.end => End {
+    duration_ms: f64,
+    source: EndSource,
+    players: Vec<EndPlayer>,
+  });
 }
 
 pub mod ribbon {

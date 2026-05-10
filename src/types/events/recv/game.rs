@@ -44,11 +44,11 @@ event!(game.score => Score {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct End {
-  leaderboard: Option<Vec<Leaderboard>>,
-  scoreboard: Option<Vec<Scoreboard>>,
+  pub leaderboard: Option<Vec<Leaderboard>>,
+  pub scoreboard: Option<Vec<Scoreboard>>,
   #[serde(rename = "xpPerUser")]
-  xp_per_user: f64,
-  winners: Vec<Value>,
+  pub xp_per_user: f64,
+  pub winners: Vec<Value>,
 }
 
 impl Event for End {

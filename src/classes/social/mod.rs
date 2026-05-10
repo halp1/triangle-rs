@@ -114,7 +114,7 @@ impl Social {
     let other = self.other.clone();
     let me = self.me.clone();
     let auto_process_notifications = self.config.auto_process_notifications;
-    let mut ribbon = self.ribbon.clone();
+    let ribbon = self.ribbon.clone();
 
     self
       .ribbon

@@ -137,7 +137,7 @@ impl Client {
       .unwrap_or(SpectatingStrategy::Instant);
 
     let session_id = format!("SESS-{}", rand::random::<u64>());
-    let mut ribbon = Ribbon::new(ribbon::Params {
+    let ribbon = Ribbon::new(ribbon::Params {
       handling: handling.clone(),
       options: options
         .ribbon
@@ -212,18 +212,18 @@ impl Client {
   }
 
   async fn init(&self) {
-    let mut ribbon = self.ribbon.clone();
+    let ribbon = self.ribbon.clone();
     let room = self.room.clone();
     let me = self.user.clone();
     let game = self.game.clone();
+    let strategy = self.spectating_strategy;
     self
       .ribbon
       .on::<recv::room::Join>(async move |_| {
         let update = ribbon.wait::<recv::room::Update>().await;
         if let Some(update) = update {
-          let r = Room::new(ribbon.clone(), game.clone(), me.clone(), update).await;
+          let r = Room::new(ribbon.clone(), game.clone(), me.clone(), update, strategy).await;
           room.lock().await.replace(r);
-          // TODO: set client.room idk how to do that
           ribbon.emit(send::client::room::Join {}).await;
         }
       })
@@ -327,5 +327,35 @@ impl Client {
     error_events: &[&str],
   ) -> std::result::Result<T, WrapError> {
     self.ribbon.wrap_with_error(event, error_events).await
+  }
+
+  pub async fn set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
+    self.spectating_strategy = strategy;
+    self
+      .room
+      .lock()
+      .await
+      .as_mut()
+      .map(|r| r._set_spectating_strategy(strategy));
+  }
+
+  pub async fn join_room(&self, room_id: &str) -> Result<(), WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::client::room::Join>(send::room::Join(room_id.to_string()))
+      .await
+      .map(|_| ())
+  }
+
+  pub async fn create_room(&self, public: bool) -> Result<(), WrapError> {
+    self
+      .ribbon
+      .wrap::<recv::client::room::Join>(send::room::Create(public))
+      .await
+      .map(|_| ())
+  }
+
+  pub async fn list_rooms(&self) -> Result<Vec<api::rooms::Room>, ApiError> {
+    self.api.rooms.list().await
   }
 }

@@ -168,7 +168,7 @@ impl<'p, 'a> ser::Serializer for &'a mut MsgpackSerializer<'p> {
     _name: &'static str,
     _variant_index: u32,
     variant: &'static str,
-    len: usize,
+    _len: usize,
   ) -> Result<StructEncdr<'a, 'p>> {
     // Encode as [variant_name, {fields...}]
     self.buf.push(0x92); // fixarray len=2

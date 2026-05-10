@@ -1,5 +1,3 @@
-pub mod legacy;
-
 use crate::engine::utils::rng::Rng;
 use serde::{Deserialize, Serialize};
 

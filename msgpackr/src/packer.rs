@@ -1,8 +1,7 @@
-use crate::decode::{unpack_value_with_opts, Decoder};
+use crate::decode::Decoder;
 use crate::encode::*;
 use crate::error::{Error, Result};
-use crate::options::{ExtRegistry, Float32Mode, PackOptions, UnpackOptions};
-use crate::value::Value;
+use crate::options::{ExtRegistry, UnpackOptions};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -355,5 +354,11 @@ impl RecordEncoder {
     }
     buf.extend_from_slice(&self.values_buf);
     Ok(())
+  }
+}
+
+impl Default for RecordEncoder {
+  fn default() -> Self {
+    Self::new()
   }
 }

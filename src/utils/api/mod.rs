@@ -1,9 +1,10 @@
-use crate::utils::{api::core::RequestSet, constants};
+use crate::{utils::{api::core::RequestSet, constants}};
 
 pub mod core;
 pub mod server;
 pub mod social;
 pub mod users;
+pub mod rooms;
 
 pub use core::Transport;
 
@@ -28,6 +29,7 @@ impl Default for Config {
 pub struct Api {
   pub config: Config,
 
+	pub rooms: rooms::Rooms,
   pub server: server::Server,
   pub social: social::Social,
   pub users: users::Users,
@@ -37,6 +39,7 @@ impl Api {
   pub fn new(config: Config) -> Self {
     let cloned = config.clone();
     let mut s = Self {
+      rooms: rooms::Rooms::new(),
       server: server::Server::new(),
       social: social::Social::new(),
       users: users::Users::new(),
@@ -51,6 +54,11 @@ impl Api {
   pub fn update(&mut self, config: Config) {
     self.config = config;
 
+		self.rooms.set_params(
+			self.config.token.clone(),
+			self.config.user_agent.clone(),
+			self.config.transport,
+		);
     self.server.set_params(
       self.config.token.clone(),
       self.config.user_agent.clone(),

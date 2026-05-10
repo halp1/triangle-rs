@@ -8,10 +8,7 @@ pub mod utils;
 
 use board::{Board, BoardInitParams, InsertGarbageParams, Tile};
 use constants::*;
-use garbage::{
-  GarbageQueue, GarbageQueueInitParams, IncomingGarbage, OutgoingGarbage,
-  legacy::LegacyGarbageQueue,
-};
+use garbage::{GarbageQueue, GarbageQueueInitParams, IncomingGarbage, OutgoingGarbage};
 use multiplayer::IgeHandler;
 use queue::types::Mino;
 use queue::{Queue, QueueInitParams, QueueSnapshot};
@@ -28,8 +25,8 @@ use crate::classes::ribbon::Hook;
 use crate::engine::utils::KickTable;
 use crate::engine::utils::tetromino::data::MinoExt;
 use crate::types::game::{
-  Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Key, Spin, SpinBonuses,
-  ige, replay,
+  Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Key, Passthrough, Spin,
+  SpinBonuses, ige, replay,
 };
 use crate::utils::EventEmitter;
 
@@ -98,7 +95,7 @@ pub struct IncreasableValue {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiplayerOptions {
   pub opponents: Vec<u64>,
-  pub passthrough: String,
+  pub passthrough: Passthrough,
 }
 
 #[derive(Debug, Clone)]
@@ -232,89 +229,6 @@ pub struct EngineSnapshot {
 }
 
 #[derive(Debug, Clone)]
-pub enum GarbageQueueVariant {
-  New(GarbageQueue),
-  Legacy(LegacyGarbageQueue),
-}
-
-impl GarbageQueueVariant {
-  fn receive(&mut self, garbages: Vec<IncomingGarbage>) {
-    match self {
-      Self::New(q) => q.receive(garbages),
-      Self::Legacy(q) => q.receive(garbages),
-    }
-  }
-
-  fn confirm(&mut self, cid: u64, gameid: u64, frame: u64) -> bool {
-    match self {
-      Self::New(q) => q.confirm(cid, gameid, frame),
-      Self::Legacy(q) => q.confirm(cid, gameid, frame),
-    }
-  }
-
-  fn cancel(
-    &mut self,
-    amount: u32,
-    piece_count: u32,
-    legacy_opener: bool,
-  ) -> (u32, Vec<IncomingGarbage>) {
-    match self {
-      Self::New(q) => q.cancel(amount, piece_count, legacy_opener),
-      Self::Legacy(q) => q.cancel(amount, piece_count, legacy_opener),
-    }
-  }
-
-  fn tank(&mut self, frame: u64, cap: f64, hard: bool) -> Vec<OutgoingGarbage> {
-    match self {
-      Self::New(q) => q.tank(frame, cap, hard),
-      Self::Legacy(q) => q.tank(frame, cap, hard),
-    }
-  }
-
-  fn round(&mut self, amount: f64) -> u32 {
-    match self {
-      Self::New(q) => q.round(amount),
-      Self::Legacy(q) => q.round(amount),
-    }
-  }
-
-  fn reset(&mut self) {
-    match self {
-      Self::New(q) => q.reset(),
-      Self::Legacy(q) => q.reset(),
-    }
-  }
-
-  fn snapshot(&self) -> garbage::GarbageQueueSnapshot {
-    match self {
-      Self::New(q) => q.snapshot(),
-      Self::Legacy(q) => q.snapshot(),
-    }
-  }
-
-  fn from_snapshot(&mut self, snap: &garbage::GarbageQueueSnapshot) {
-    match self {
-      Self::New(q) => q.from_snapshot(snap),
-      Self::Legacy(q) => q.from_snapshot(snap),
-    }
-  }
-
-  fn options(&self) -> &GarbageQueueInitParams {
-    match self {
-      Self::New(q) => &q.options,
-      Self::Legacy(q) => &q.options,
-    }
-  }
-
-  pub fn size(&self) -> u32 {
-    match self {
-      Self::New(q) => q.size(),
-      Self::Legacy(q) => q.size(),
-    }
-  }
-}
-
-#[derive(Debug, Clone)]
 pub struct Engine {
   pub queue: Queue,
   __internal_queue: Queue,
@@ -335,7 +249,7 @@ pub struct Engine {
 
   pub stats: EngineStats,
   pub game_options: GameOptions,
-  pub garbage_queue: GarbageQueueVariant,
+  pub garbage_queue: GarbageQueue,
   pub frame: u64,
   pub subframe: f64,
   pub initializer: EngineInitParams,
@@ -423,23 +337,7 @@ impl Engine {
         lines: 0,
       },
       game_options: params.options.clone(),
-      garbage_queue: {
-        let use_new = params
-          .misc
-          .date
-          .map(|d| {
-            let cutoff = chrono::DateTime::parse_from_rfc3339("2025-05-06T19:00:00Z")
-              .unwrap()
-              .with_timezone(&chrono::Utc);
-            d > cutoff
-          })
-          .unwrap_or(true);
-        if use_new {
-          GarbageQueueVariant::New(GarbageQueue::new(params.garbage.clone()))
-        } else {
-          GarbageQueueVariant::Legacy(LegacyGarbageQueue::new(params.garbage.clone()))
-        }
-      },
+      garbage_queue: GarbageQueue::new(params.garbage.clone()),
       frame: 0,
       subframe: 0.0,
       initializer: params.clone(),
@@ -495,9 +393,9 @@ impl Engine {
       ),
       glock: 0.0,
       multiplayer: params.multiplayer.as_ref().map(|mp| MultiplierState {
-        passthrough_network: ["consistent", "zero"].contains(&mp.passthrough.as_str()),
-        passthrough_replay: mp.passthrough != "full",
-        passthrough_travel: ["zero", "limited"].contains(&mp.passthrough.as_str()),
+        passthrough_network: [Passthrough::Consistent, Passthrough::Zero].contains(&mp.passthrough),
+        passthrough_replay: mp.passthrough != Passthrough::Full,
+        passthrough_travel: [Passthrough::Zero, Passthrough::Limited].contains(&mp.passthrough),
         options: mp.clone(),
         targets: Vec::new(),
       }),

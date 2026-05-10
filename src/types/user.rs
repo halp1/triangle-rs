@@ -1,13 +1,5 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-fn null_as_default<'de, D, T>(d: D) -> std::result::Result<T, D::Error>
-where
-  D: Deserializer<'de>,
-  T: Default + Deserialize<'de>,
-{
-  Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {

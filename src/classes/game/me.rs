@@ -8,7 +8,11 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::{
   Engine,
-  classes::{ClientUser, Ribbon, game::FRAMES_PER_SECOND, ribbon::Hook},
+  classes::{
+    ClientUser, Ribbon,
+    game::{FRAMES_PER_SECOND, Game},
+    ribbon::Hook,
+  },
   types::{
     events::{recv, send},
     game::{
@@ -38,7 +42,6 @@ pub struct MeState {
   over: bool,
 
   pub engine: Engine,
-  pub gameid: u64,
   pub options: Value, // TODO: swap out
   pub server_targets: Vec<u64>,
   pub enemies: Vec<u64>,
@@ -60,9 +63,9 @@ pub struct Me {
 
   handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
   pub state: Arc<Mutex<MeState>>,
+  pub gameid: u64,
   pub tick: tick::Ticker,
 }
-
 
 impl Me {
   pub fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
@@ -98,13 +101,15 @@ impl Me {
         force_pause_iges: false,
         ige_queue: Vec::new(),
         slow_tick_warning: false,
-        players,
+        players: players.clone(),
         is_practice: false,
         over: false,
 
-        // engine: Game::create_engine(self_player.options, self_player.gameid, players.clone()),
-        engine: unimplemented!(), // TODO: implement
-        gameid: self_player.gameid,
+        engine: Game::create_engine(
+          &self_player.options,
+          self_player.gameid,
+          players.clone().as_slice(),
+        ),
         options: self_player.options,
         server_targets: Vec::new(),
         enemies: Vec::new(),
@@ -113,6 +118,8 @@ impl Me {
         start_time: None,
         last_ige_flush: Instant::now(),
       })),
+
+      gameid: self_player.gameid,
     };
 
     s.start(start_hook_rx);
@@ -121,7 +128,7 @@ impl Me {
   }
 
   pub async fn destroy(&mut self) {
-    self.hook.destroy();
+    self.hook.destroy().await;
 
     let mut state = self.state.lock().await;
 
@@ -186,12 +193,12 @@ impl Me {
         state.target.clone()
       };
 
-      me.set_target(target).await;
+      me.set_target(target).await.ok();
 
       me.ribbon.emit(recv::client::game::round::Start {
         ticker: me.tick.clone(),
         engine: me.state.lock().await.engine.clone(),
-      });
+      }).await;
     });
   }
 
@@ -243,7 +250,7 @@ impl Me {
 
   /// Returns (continue, delay until next tick. 0 = run instantly)
   async fn tick_game(&mut self) -> (bool, Duration) {
-    let (snapshot, engine, gameid) = {
+    let (snapshot, engine) = {
       let state = self.state.lock().await;
 
       if state.over {
@@ -252,10 +259,10 @@ impl Me {
 
       let snapshot = state.engine.snapshot();
 
-      (snapshot, state.engine.clone(), state.gameid)
+      (snapshot, state.engine.clone())
     };
 
-    let res = (self.tick.0.lock().await)(tick::In { engine, gameid }).await;
+    let res = (self.tick.0.lock().await)(tick::In { engine, gameid: self.gameid }).await;
 
     {
       let mut state = self.state.lock().await;
@@ -272,7 +279,7 @@ impl Me {
 
     self.flush_iges().await;
 
-    let (gameid, frame, start_time) = {
+    let (frame, start_time) = {
       let mut state = self.state.lock().await;
 
       let mut keys = Vec::new();
@@ -319,7 +326,7 @@ impl Me {
 
       state.frame_queue.extend(key_frames);
 
-      (state.gameid, state.engine.frame, state.start_time)
+      (state.engine.frame, state.start_time)
     };
 
     if frame != 0 && frame % FRAMES_PER_MESSAGE == 0 {
@@ -327,7 +334,7 @@ impl Me {
       self
         .ribbon
         .emit(send::game::Replay {
-          gameid,
+          gameid: self.gameid,
           provisioned: frame,
           frames,
         })

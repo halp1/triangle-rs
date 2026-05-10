@@ -339,6 +339,7 @@ pub struct Leaderboard {
   pub naturalorder: i32,
   pub alive: bool,
   pub lifetime: i64,
+  pub wins: u32,
   pub stats: serde_json::Value,
 }
 
@@ -764,6 +765,14 @@ pub mod tick {
   impl std::fmt::Debug for Ticker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
       f.debug_tuple("Ticker").finish()
+    }
+  }
+
+  impl Ticker {
+    pub async fn inject(&self, func: impl Fn(In) -> BoxFuture<'static, Out> + Send + Sync + 'static) {
+      let func = Box::new(func);
+      let mut ticker = self.0.lock().await;
+      *ticker = func;
     }
   }
 }

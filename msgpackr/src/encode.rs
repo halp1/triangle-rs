@@ -8,9 +8,10 @@ fn mult10_table() -> &'static [f64; 256] {
   static TABLE: OnceLock<[f64; 256]> = OnceLock::new();
   TABLE.get_or_init(|| {
     let mut t = [0f64; 256];
-    for i in 0..256usize {
+    for (i, item) in t.iter_mut().enumerate() {
+			#[allow(clippy::approx_constant)]
       let exp = 45.15 - (i as f64) * 0.30103;
-      t[i] = 10f64.powf(exp.floor());
+      *item = 10f64.powf(exp.floor());
     }
     t
   })
@@ -385,7 +386,7 @@ pub(crate) fn write_ext_buffer(data: &[u8], type_code: u8, buf: &mut Vec<u8>) {
 /// or Timestamp96 (12 bytes) for out-of-range.
 pub(crate) fn encode_timestamp(seconds: i64, nanos: u32, buf: &mut Vec<u8>, opts: &PackOptions) {
   let use_32 = opts.use_timestamp32 || nanos == 0;
-  if use_32 && seconds >= 0 && seconds < 0x1_0000_0000 {
+  if use_32 && (0i64..0x1_0000_0000).contains(&seconds) {
     // Timestamp 32: 4 bytes, seconds only
     buf.push(0xd6); // fixext4
     buf.push(0xff); // timestamp type

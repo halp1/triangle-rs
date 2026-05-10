@@ -4,11 +4,11 @@ use tokio::sync::{Mutex, MutexGuard, oneshot};
 
 use crate::{
   Engine,
-  classes::{Ribbon, ribbon::Hook},
+  classes::{Ribbon, game::Game, ribbon::Hook},
   types::{
     events::{recv, send},
     game::{ReadyPlayer, ReplayState, SpectatingStrategy, replay::Frame},
-  },
+  }
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,8 +50,7 @@ impl Player {
     let hook = ribbon.hook();
 
     let state = Arc::new(Mutex::new(PlayerState {
-      // engine: Game::create_engine(me.options, me.gameid, players),
-      engine: unimplemented!(), // TODO: implement
+      engine: Game::create_engine(&me.options, me.gameid, players.as_slice()),
       state: SpectatingState::Inactive,
       queue: Vec::new(),
       strategy,
@@ -73,6 +72,7 @@ impl Player {
     let gameid = me.gameid;
 
     let state = player.state.clone();
+
     player
       .hook
       .on::<recv::game::replay::State>(async move |event| {
@@ -81,6 +81,8 @@ impl Player {
         }
 
         let mut state = state.lock().await;
+
+        let initializer = state.engine.initializer.clone();
 
         state.resolvers.drain(..).for_each(|resolver| {
           resolver.send(Ok(())).ok();
@@ -95,15 +97,18 @@ impl Player {
             // TODO: what to do here?
           }
           ReplayState::State(data) => {
-            // state.engine.from_snapshot(Game::snapshot_from_state(
-            //   data.frame,
-            //   state.engine.initializer.clone(),
-            //   data.game,
-            // ));
+            state.engine.from_snapshot(&Game::snapshot_from_state(
+              data.frame,
+              &initializer,
+              &data.game,
+              false,
+            ));
           }
         }
       })
       .await;
+
+    let state = player.state.clone();
 
     player
       .hook
@@ -239,8 +244,8 @@ impl Player {
     };
   }
 
-	pub async fn _set_strategy(&self, strategy: SpectatingStrategy) {
-		let mut state = self.state.lock().await;
-		state.strategy = strategy;
-	}
+  pub async fn _set_spectating_strategy(&self, strategy: SpectatingStrategy) {
+    let mut state = self.state.lock().await;
+    state.strategy = strategy;
+  }
 }
