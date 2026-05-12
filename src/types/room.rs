@@ -39,7 +39,7 @@ pub struct Player {
   pub anon: bool,
   pub bot: bool,
   pub role: String,
-  pub xp: u32,
+  pub xp: f64,
   pub badges: Option<Vec<Badge>>,
   pub record: Record,
   pub bracket: Bracket,

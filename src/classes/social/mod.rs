@@ -160,6 +160,7 @@ impl Social {
       .ribbon
       .on::<recv::social::DM>(async move |raw| {
         let mut target = raw.data.user.clone();
+        let mut username = "".to_string();
 
         if target == me.id {
           if let Some(id) = raw.stream.split(':').find(|id| *id != me.id) {
@@ -169,20 +170,25 @@ impl Social {
           }
         }
 
-        let mut other = other.lock().await;
-        let mut friends = friends.lock().await;
+        let user = {
+          let other = other.lock().await;
+          let friends = friends.lock().await;
 
-        let user = other
-          .iter_mut()
-          .find(|u| u.user_id == target)
-          .or_else(|| friends.iter_mut().find(|u| u.user_id == target));
+          other
+            .iter()
+            .find(|u| u.user_id == target)
+            .or_else(|| friends.iter().find(|u| u.user_id == target))
+            .cloned()
+        };
 
         if let Some(user) = user {
-          if !user.dms_loaded && auto_load_dms {
+          if !user.dms_loaded().await && auto_load_dms {
             user.load_dms().await.ok();
           } else {
-            user.dms.push(raw.clone());
+            user._add_dm(raw.clone()).await;
           }
+
+          username = user.username.clone();
         } else {
           if let Ok(u) = ribbon.api.users.get(&target.clone()).await {
             let new_rel = Relationship::new(
@@ -205,19 +211,36 @@ impl Social {
                   relationship_type: rel::Type::Pending,
                 },
                 user_id: u.id,
-                user_username: u.username,
+                user_username: u.username.clone(),
                 user_avatar: u.avatar_revision,
               },
             );
 
-            other.push(new_rel);
+            other.lock().await.push(new_rel);
+
+            username = u.username;
+          } else {
+            tracing::warn!("Failed to fetch user information for DM");
           }
         }
+
+        if raw.data.user == me.id {
+          return;
+        }
+
+        ribbon
+          .emit(send::client::DM {
+            user_id: target,
+            username: username.into(),
+            content: raw.data.content.clone(),
+            raw,
+          })
+          .await
       })
       .await;
 
     if self.config.auto_process_notifications {
-      for n in self.notifications.lock().await.iter() {
+      for n in self.notifications.lock().await.clone().iter() {
         if !n.seen {
           if n.notification_type == "friend" {
             if let Some(rel) = n.data.get("relationship") {
@@ -236,6 +259,7 @@ impl Social {
           }
         }
       }
+			self.mark_notifications_as_read().await;
     }
   }
 

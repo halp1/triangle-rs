@@ -1,8 +1,6 @@
 use crate::encode::*;
 use crate::error::{Error, Result};
-use crate::options::PackOptions;
 use crate::packer::{Packer, RecordEncoder};
-use crate::value::Value;
 use serde::ser::{
   self, Serialize, SerializeMap, SerializeSeq, SerializeStruct, SerializeStructVariant,
   SerializeTuple, SerializeTupleStruct, SerializeTupleVariant,

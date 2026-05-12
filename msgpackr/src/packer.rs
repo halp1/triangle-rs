@@ -1,7 +1,8 @@
 use crate::decode::Decoder;
 use crate::encode::*;
 use crate::error::{Error, Result};
-use crate::options::{ExtRegistry, UnpackOptions};
+use crate::options::{ExtRegistry, PackOptions, UnpackOptions};
+use crate::value::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 

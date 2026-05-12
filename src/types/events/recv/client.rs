@@ -1,4 +1,4 @@
-use crate::{macros::event, types::social};
+use crate::{classes::social::relationship::Relationship, macros::event, types::social};
 
 event!(client.ready => Ready {
   endpoint: String,
@@ -53,14 +53,9 @@ pub mod game {
   }
 
   pub mod round {
-    use crate::{Engine, types::game::tick};
-
     use super::*;
 
-    event!(client.game.round.start => Start {
-      ticker: tick::Ticker,
-      engine: Engine,
-    });
+    event!(client.game.round.start => Start {});
     event!(client.game.round.end => End(Option<String>));
   }
 
@@ -115,8 +110,8 @@ event!(client.friended => Friended {
 });
 
 event!(client.dm => DM {
-  relationship: social::relationship::Relationship,
+  user_id: String,
+  username: String,
   raw: social::dm::DM,
   content: String
-  // TODO: reply?
 });

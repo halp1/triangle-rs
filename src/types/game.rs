@@ -337,7 +337,7 @@ pub struct Leaderboard {
   pub username: String,
   pub active: bool,
   pub naturalorder: i32,
-  pub alive: bool,
+  pub alive: Option<bool>,
   pub lifetime: i64,
   pub wins: u32,
   pub stats: serde_json::Value,
@@ -691,7 +691,6 @@ pub mod tick {
   use std::sync::Arc;
 
   use futures_util::future::BoxFuture;
-  use serde::{Deserialize, Serialize};
   use tokio::sync::Mutex;
 
   use crate::Engine;
@@ -743,24 +742,6 @@ pub mod tick {
 
   #[derive(Clone)]
   pub struct Ticker(pub Arc<Mutex<Box<dyn Fn(In) -> BoxFuture<'static, Out> + Send + Sync>>>);
-
-  impl<'de> Deserialize<'de> for Ticker {
-    fn deserialize<D>(_: D) -> Result<Self, D::Error>
-    where
-      D: serde::Deserializer<'de>,
-    {
-      unimplemented!("Ticker can not be deserialized")
-    }
-  }
-
-  impl Serialize for Ticker {
-    fn serialize<S>(&self, _: S) -> Result<S::Ok, S::Error>
-    where
-      S: serde::Serializer,
-    {
-      unimplemented!("Ticker can not be serialized")
-    }
-  }
 
   impl std::fmt::Debug for Ticker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

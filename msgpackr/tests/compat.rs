@@ -1,4 +1,4 @@
-use msgpackr::options::{Float32Mode, PackOptions, UnpackOptions};
+use msgpackr::options::{PackOptions, UnpackOptions};
 use msgpackr::value::Value;
 use msgpackr::Packer;
 use msgpackr::{pack, pack_with_opts, unpack, unpack_multiple, unpack_opts};
@@ -32,12 +32,6 @@ fn fixture(name: &str) -> Vec<u8> {
 fn roundtrip(val: &Value) -> Value {
   let encoded = pack(val).expect("pack failed");
   unpack(&encoded).expect("unpack failed")
-}
-
-fn roundtrip_records(val: &Value) -> Value {
-  let mut packer = Packer::new();
-  let encoded = packer.pack_value(val).expect("pack failed");
-  packer.unpack_value(&encoded).expect("unpack failed")
 }
 
 // ─── Basic types ────────────────────────────────────────────────────────────
@@ -356,7 +350,7 @@ fn test_map_roundtrip() {
 #[test]
 fn test_records_first_definition() {
   let bytes = fixture("records_first_def");
-  let mut packer = Packer::new();
+  let packer = Packer::new();
   let val = packer.unpack_value(&bytes).expect("unpack failed");
   assert!(
     matches!(val, Value::Map(_)),
@@ -378,8 +372,8 @@ fn test_records_reuse_structure() {
   let bytes1 = fixture("records_first_def");
   let bytes2 = fixture("records_reuse");
 
-  let mut packer = Packer::new();
-  let v1 = packer.unpack_value(&bytes1).unwrap();
+  let packer = Packer::new();
+  let _v1 = packer.unpack_value(&bytes1).unwrap();
   let v2 = packer.unpack_value(&bytes2).unwrap();
 
   if let Value::Map(pairs2) = v2 {
@@ -396,7 +390,7 @@ fn test_records_reuse_structure() {
 #[test]
 fn test_records_array_of_structs() {
   let bytes = fixture("records_array_of_structs");
-  let mut packer = Packer::new();
+  let packer = Packer::new();
   let val = packer.unpack_value(&bytes).unwrap();
   if let Value::Array(arr) = &val {
     assert_eq!(arr.len(), 3);
@@ -418,7 +412,7 @@ fn test_records_encode_decode() {
   ]);
   let encoded = packer.pack_value(&obj).unwrap();
 
-  let mut packer2 = Packer::new();
+  let packer2 = Packer::new();
   let decoded = packer2.unpack_value(&encoded).unwrap();
   assert_eq!(decoded, obj);
 }
@@ -783,7 +777,6 @@ fn test_undefined_roundtrip() {
 
 #[cfg(test)]
 mod serde_tests {
-  use super::*;
   use msgpackr::{from_slice, to_vec};
   use serde::{Deserialize, Serialize};
 

@@ -39,7 +39,7 @@ impl Hook {
   }
 
   pub async fn once<T: Event>(&self, callback: impl Fn(T) + Send + 'static) -> &Self {
-    let handle = self.emitter.once_fn(callback);
+    let handle = self.emitter.once(callback);
     self.handles.lock().await.push(handle);
     self
   }
@@ -57,6 +57,9 @@ impl Hook {
 
 impl Drop for Hook {
   fn drop(&mut self) {
+    if std::sync::Arc::strong_count(&self.handles) > 1 {
+      return;
+    }
     let handles = self.handles.clone();
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
       rt.spawn(async move {

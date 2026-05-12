@@ -21,7 +21,6 @@ use utils::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::classes::ribbon::Hook;
 use crate::engine::utils::KickTable;
 use crate::engine::utils::tetromino::data::MinoExt;
 use crate::types::game::{
@@ -240,8 +239,6 @@ pub struct Engine {
 
   kick_table: KickTable,
 
-  undo_hook: Hook,
-
   pub board: Board,
 
   pub last_spin: Option<Spin>,
@@ -271,24 +268,6 @@ pub struct Engine {
   pub events: EventEmitter,
 }
 
-impl<'de> Deserialize<'de> for Engine {
-  fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-  where
-    D: serde::Deserializer<'de>,
-  {
-    unimplemented!("Engine cannot be deserialized")
-  }
-}
-
-impl Serialize for Engine {
-  fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    unimplemented!("Engine cannot be serialized")
-  }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockResult {
   pub mino: Mino,
@@ -312,7 +291,6 @@ impl Engine {
       queue: Queue::new(params.queue.clone()),
       __internal_queue: Queue::new(params.queue.clone()),
       events: events.clone(),
-      undo_hook: events.hook(),
       held: None,
       hold_locked: false,
       falling: Tetromino::new(TetrominoInitParams {
@@ -427,6 +405,7 @@ impl Engine {
       },
     };
     e.__internal_queue.set_min_length(14);
+
     e.next_piece(false, false);
     e
   }
@@ -867,6 +846,8 @@ impl Engine {
       }
     }
 
+    self.undo_piece_spawn(is_hold);
+
     self.events.emit(events::falling::New { piece, is_hold });
   }
 
@@ -1181,7 +1162,7 @@ impl Engine {
       broke_b2b = None;
     }
 
-    let special_bonus = self.garbage_queue.options().special_bonus
+    let special_bonus = self.garbage_queue.options.special_bonus
       && garbage_cleared > 0
       && (last_spin != Spin::None || lines >= 4);
     let g_special_bonus: u32 = if special_bonus { 1 } else { 0 };
@@ -1291,7 +1272,7 @@ impl Engine {
         for (idx, g) in garbages.iter().enumerate() {
           let is_beg = idx == 0 || garbages[idx - 1].id != g.id;
           let is_end = idx == garbages.len() - 1 || garbages[idx + 1].id != g.id;
-          let bomb_opt = self.garbage_queue.options().bombs;
+          let bomb_opt = self.garbage_queue.options.bombs;
           self.board.insert_garbage(InsertGarbageParams {
             amount: g.amount,
             size: g.size,
@@ -1310,6 +1291,8 @@ impl Engine {
         garbage_added = Some(garbages);
       }
     }
+
+    self.undo_piece_lock();
 
     self.events.emit(events::falling::LockPre {});
     self.next_piece(false, false);
@@ -1556,6 +1539,25 @@ impl Engine {
   }
   pub fn rotate_180(&mut self) -> bool {
     self.rotate(2, false)
+  }
+
+  fn undo_piece_spawn(&mut self, is_hold: bool) {
+    if is_hold {
+      return;
+    }
+    let snap = self.snapshot_internal(true);
+    self.practice.last_piece = Some(Box::new(snap));
+  }
+
+  fn undo_piece_lock(&mut self) {
+    if let Some(ref snap) = self.practice.last_piece {
+      self.practice.undo.push(*snap.clone());
+    }
+
+    if self.practice.undo.len() > 100 {
+      self.practice.undo.remove(0);
+    }
+    self.practice.redo.clear();
   }
 
   pub fn undo(&mut self) -> bool {
@@ -1816,7 +1818,7 @@ impl Engine {
           } else {
             *amt as u32
           };
-          let gf = u64::MAX / 2 - self.garbage_queue.options().garbage.speed;
+          let gf = u64::MAX / 2 - self.garbage_queue.options.garbage.speed;
           self.receive_garbage(vec![IncomingGarbage {
             frame: gf,
             amount,
@@ -2078,6 +2080,13 @@ impl Engine {
       line.push_str(if i % 2 == 0 { "|" } else { " " });
       println!("{}", line);
     }
+  }
+
+  /// Clones with a clean event emitter.
+  pub fn pure_clone(&self) -> Self {
+    let mut c = self.clone();
+    c.events = EventEmitter::new();
+    c
   }
 }
 

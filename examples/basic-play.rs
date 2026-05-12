@@ -9,6 +9,7 @@ use triangle::{
   types::{
     events::recv,
     game::{Key, tick},
+    room::Bracket,
   },
 };
 
@@ -16,7 +17,11 @@ use triangle::{
 async fn main() {
   dotenvy::dotenv().ok();
 
-  let mut client = Client::new(ClientOptions {
+  tracing_subscriber::fmt::init();
+
+  tracing::info!("Starting client...");
+
+  let client = Client::new(ClientOptions {
     token: Credentials::Token(env::var("TOKEN").expect("TOKEN env var not set")),
     game: None,
     user_agent: None,
@@ -35,35 +40,55 @@ async fn main() {
   .await
   .expect("Failed to create client");
 
-  println!("Client created: {:?}", client.user);
+  tracing::info!("Client created: {:?}", client.user);
+
+  client
+    .ribbon
+    .on::<recv::client::DM>(async move |dm| {
+      tracing::info!("Received DM from {}: {}", dm.username, dm.content);
+    })
+    .await;
 
   let invite = client
     .wait::<recv::social::Invite>()
     .await
     .expect("Failed to receive invite");
 
-  println!("Received invite: {:?}", invite);
+  tracing::info!("Received invite: {:?}", invite);
 
   client
     .join_room(&invite.roomid)
     .await
     .expect("Failed to join room");
 
-  println!(
+  client
+    .room()
+    .await
+    .unwrap()
+    .switch(Bracket::Player)
+    .await
+    .ok();
+
+  tracing::info!(
     "Joined room {}, waiting for game to start...",
     invite.roomid
   );
 
+  client
+    .on::<recv::client::Dead>(|_| async {
+      panic!("Connection closed permanently");
+    })
+    .await;
+
   loop {
-    let start = client
+    client
       .ribbon
       .wait::<recv::client::game::round::Start>()
       .await
       .expect("Failed to receive game start event");
 
-    start
-      .ticker
-      .inject(|input| {
+    client
+      .register_ticker(|input| {
         Box::pin(async move {
           println!("Ticker input: {:?}", input);
           tick::Out {
@@ -95,6 +120,7 @@ async fn main() {
           }
         })
       })
-      .await;
+      .await
+      .ok();
   }
 }

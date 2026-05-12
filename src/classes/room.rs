@@ -51,7 +51,7 @@ pub struct RoomState {
   spectating_strategy: SpectatingStrategy,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Room {
   ribbon: Ribbon,
   hook: ribbon::Hook,
@@ -219,6 +219,8 @@ impl Room {
     self
       .hook
       .on::<recv::game::Ready>(async move |data| {
+        tracing::info!("Game ready, initializing game state...");
+
         let spectating_strategy = state.lock().await.spectating_strategy.clone();
         let g = Game::new(
           ribbon.clone(),
@@ -227,6 +229,8 @@ impl Room {
           spectating_strategy,
         )
         .await;
+
+        tracing::info!("game initialized");
 
         game.lock().await.replace(g);
 
@@ -642,10 +646,10 @@ impl Room {
       .await
   }
 
-	pub async fn _set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
-		self.state.lock().await.spectating_strategy = strategy.clone();
-		if let Some(game) = self.game.lock().await.as_ref().clone() {
-			game._set_spectating_strategy(strategy).await;
-		}
-	}
+  pub async fn _set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
+    self.state.lock().await.spectating_strategy = strategy.clone();
+    if let Some(game) = self.game.lock().await.as_ref().clone() {
+      game._set_spectating_strategy(strategy).await;
+    }
+  }
 }

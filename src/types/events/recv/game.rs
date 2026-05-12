@@ -67,7 +67,7 @@ pub mod replay {
 
   event!(game.replay.ige => IGE {
     gameid: u64,
-    data: Vec<game::ige::IGE>
+    iges: Vec<game::ige::IGE>
   });
 
   event!(game.replay.board => Board {

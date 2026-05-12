@@ -569,7 +569,7 @@ impl<'a> Decoder<'a> {
       if token < 0x80 {
         if token < 0x40 {
           // Positive fixint 0-63
-          return Ok(Value::UInt(token as u64));
+          Ok(Value::UInt(token as u64))
         } else {
           // Bytes 0x40-0x7f: record reference (if structures available), else positive fixint
           let id = (token & 0x3f) as usize;
@@ -586,29 +586,29 @@ impl<'a> Decoder<'a> {
               // Actually: the structure's .highByte tells us if two-byte is needed
               // In our Rust impl, we track this differently
             }
-            return self.read_record_object(id, opts);
+            self.read_record_object(id, opts)
           } else {
-            return Ok(Value::UInt(token as u64));
+            Ok(Value::UInt(token as u64))
           }
         }
       } else if token < 0x90 {
         // fixmap
         let len = (token - 0x80) as usize;
-        return self.read_map(len, opts);
+        self.read_map(len, opts)
       } else {
         // fixarray
         let len = (token - 0x90) as usize;
-        return self.read_array(len, opts);
+        self.read_array(len, opts)
       }
     } else if token < 0xc0 {
       // fixstr
       let len = (token - 0xa0) as usize;
       // Check for bundled strings (C1 marker used as 0xc1 in bundleStrings mode is separate)
       let s = self.read_string(len)?;
-      return Ok(Value::Str(s));
+      Ok(Value::Str(s))
     } else {
       match token {
-        0xc0 => return Ok(Value::Nil),
+        0xc0 => Ok(Value::Nil),
         0xc1 => {
           // In bundleStrings mode: read the string from bundled strings array
           // Followed by signed integer (length or negative length)
@@ -639,42 +639,42 @@ impl<'a> Decoder<'a> {
             }
           }
           // Outside bundleStrings: return C1 marker or undefined
-          return Ok(Value::Undefined);
+          Ok(Value::Undefined)
         }
-        0xc2 => return Ok(Value::Bool(false)),
-        0xc3 => return Ok(Value::Bool(true)),
+        0xc2 => Ok(Value::Bool(false)),
+        0xc3 => Ok(Value::Bool(true)),
         0xc4 => {
           // bin8
           let len = self.read_u8()? as usize;
           let data = self.read_bin(len)?;
-          return Ok(Value::Bin(data));
+          Ok(Value::Bin(data))
         }
         0xc5 => {
           // bin16
           let len = self.read_u16_be()? as usize;
           let data = self.read_bin(len)?;
-          return Ok(Value::Bin(data));
+          Ok(Value::Bin(data))
         }
         0xc6 => {
           // bin32
           let len = self.read_u32_be()? as usize;
           let data = self.read_bin(len)?;
-          return Ok(Value::Bin(data));
+          Ok(Value::Bin(data))
         }
         0xc7 => {
           // ext8
           let len = self.read_u8()? as usize;
-          return self.read_ext(len, opts);
+          self.read_ext(len, opts)
         }
         0xc8 => {
           // ext16
           let len = self.read_u16_be()? as usize;
-          return self.read_ext(len, opts);
+          self.read_ext(len, opts)
         }
         0xc9 => {
           // ext32
           let len = self.read_u32_be()? as usize;
-          return self.read_ext(len, opts);
+          self.read_ext(len, opts)
         }
         0xca => {
           // float32
@@ -682,26 +682,26 @@ impl<'a> Decoder<'a> {
           if opts.use_float32 > 2 {
             return Ok(Value::F64(crate::encode::round_float32(f)));
           }
-          return Ok(Value::F32(f));
+          Ok(Value::F32(f))
         }
         0xcb => {
           // float64
           let f = self.read_f64_be()?;
-          return Ok(Value::F64(f));
+          Ok(Value::F64(f))
         }
-        0xcc => return Ok(Value::UInt(self.read_u8()? as u64)),
-        0xcd => return Ok(Value::UInt(self.read_u16_be()? as u64)),
-        0xce => return Ok(Value::UInt(self.read_u32_be()? as u64)),
+        0xcc => Ok(Value::UInt(self.read_u8()? as u64)),
+        0xcd => Ok(Value::UInt(self.read_u16_be()? as u64)),
+        0xce => Ok(Value::UInt(self.read_u32_be()? as u64)),
         0xcf => {
           let v = self.read_u64_be()?;
-          return self.decode_uint64(v, opts);
+          self.decode_uint64(v, opts)
         }
-        0xd0 => return Ok(Value::Int(self.read_i8()? as i64)),
-        0xd1 => return Ok(Value::Int(self.read_i16_be()? as i64)),
-        0xd2 => return Ok(Value::Int(self.read_i32_be()? as i64)),
+        0xd0 => Ok(Value::Int(self.read_i8()? as i64)),
+        0xd1 => Ok(Value::Int(self.read_i16_be()? as i64)),
+        0xd2 => Ok(Value::Int(self.read_i32_be()? as i64)),
         0xd3 => {
           let v = self.read_i64_be()?;
-          return self.decode_int64(v, opts);
+          self.decode_int64(v, opts)
         }
         0xd4 => {
           // fixext1 — type byte + 1 data byte
@@ -711,7 +711,7 @@ impl<'a> Decoder<'a> {
             return self.read_record_definition(id_byte & 0x3f, None, opts);
           }
           let end = self.pos + 1;
-          return self.dispatch_ext_data(ext_type, 1, end, opts);
+          self.dispatch_ext_data(ext_type, 1, end, opts)
         }
         0xd5 => {
           // fixext2 — type byte + 2 data bytes
@@ -722,53 +722,47 @@ impl<'a> Decoder<'a> {
             let b2 = self.read_u8()?;
             return self.read_record_definition(b1 & 0x3f, Some(b2), opts);
           }
-          return self.read_ext(2, opts);
+          self.read_ext(2, opts)
         }
-        0xd6 => return self.read_ext(4, opts),
-        0xd7 => return self.read_ext(8, opts),
-        0xd8 => return self.read_ext(16, opts),
+        0xd6 => self.read_ext(4, opts),
+        0xd7 => self.read_ext(8, opts),
+        0xd8 => self.read_ext(16, opts),
         0xd9 => {
           let len = self.read_u8()? as usize;
-          return Ok(Value::Str(self.read_string(len)?));
+          Ok(Value::Str(self.read_string(len)?))
         }
         0xda => {
           let len = self.read_u16_be()? as usize;
-          return Ok(Value::Str(self.read_string(len)?));
+          Ok(Value::Str(self.read_string(len)?))
         }
         0xdb => {
           let len = self.read_u32_be()? as usize;
-          return Ok(Value::Str(self.read_string(len)?));
+          Ok(Value::Str(self.read_string(len)?))
         }
         0xdc => {
           let len = self.read_u16_be()? as usize;
-          return self.read_array(len, opts);
+          self.read_array(len, opts)
         }
         0xdd => {
           let len = self.read_u32_be()? as usize;
-          return self.read_array(len, opts);
+          self.read_array(len, opts)
         }
         0xde => {
           let len = self.read_u16_be()? as usize;
-          return self.read_map(len, opts);
+          self.read_map(len, opts)
         }
         0xdf => {
           let len = self.read_u32_be()? as usize;
-          return self.read_map(len, opts);
+          self.read_map(len, opts)
         }
         // negative fixint: 0xe0-0xff
-        _ if token >= 0xe0 => {
-          return Ok(Value::Int(token as i8 as i64));
-        }
-        _ => {
-          return Err(Error::invalid(format!(
-            "Unknown MessagePack token: 0x{:02x}",
-            token
-          )));
-        }
+        _ if token >= 0xe0 => Ok(Value::Int(token as i8 as i64)),
+        _ => Err(Error::invalid(format!(
+          "Unknown MessagePack token: 0x{:02x}",
+          token
+        ))),
       }
     }
-
-    unreachable!()
   }
 
   /// Re-dispatch already-peeked ext data by type code.

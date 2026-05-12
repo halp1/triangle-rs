@@ -34,9 +34,9 @@ urlencoding = "2"
 bitflags = "2.11.0"
 colored = "2"
 terminal_size = "0.4"
-dotenvy = "0.15"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 dotenvy = "0.15"
 msgpackr = { path = "msgpackr" }
+tracing-subscriber = "0.3.23"

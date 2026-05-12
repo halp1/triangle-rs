@@ -1,10 +1,11 @@
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::{collections::HashMap, pin::Pin};
 
 use futures_util::future::join_all;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
+use crate::types::game::tick;
 use crate::{
   classes::{
     ClientUser,
@@ -32,7 +33,6 @@ use crate::{
     Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Passthrough, ReadyPlayer,
     SpectateTarget, SpectatingStrategy, Spin, SpinBonuses,
   },
-  utils::Logger,
 };
 
 use super::ribbon::{Hook, Ribbon};
@@ -135,7 +135,6 @@ pub struct GameState {
 pub struct Game {
   ribbon: Ribbon,
   hook: Hook,
-  logger: Logger,
 
   pub me: Option<Me>,
   pub state: Arc<Mutex<GameState>>,
@@ -166,7 +165,6 @@ impl Game {
     let s = Self {
       ribbon: ribbon.clone(),
       hook: ribbon.hook(),
-      logger: Logger::new("triangle-rs"),
       me,
       state: Arc::new(Mutex::new(GameState {
         strategy,
@@ -179,11 +177,17 @@ impl Game {
 
     s.start_spectating_loop().await;
 
+    tracing::info!("game started, me present: {}", s.me.is_some());
+    if let Some(me) = &s.me {
+      me.init().await;
+      tracing::info!("me initialized");
+    }
+
     s
   }
 
   async fn start_spectating_loop(&self) {
-    let mut game = self.clone();
+    let game = self.clone();
 
     self.state.lock().await.spectating_loop_handle.lock().await.replace(tokio::task::spawn(async move {
 			loop {
@@ -197,7 +201,7 @@ impl Game {
 					let mut state = game.state.lock().await;
 					state.spectate_warning_counter += 1;
 					if state.spectate_warning_counter == 5 {
-						game.logger.warn(
+						tracing::warn!(
 							"Spectating is falling behind! You are spectating too many players. Consider reducing the number of players you are spectating to improve performance."
 						);
 					}
@@ -742,6 +746,21 @@ impl Game {
       Ok(())
     } else {
       Err(invalid)
+    }
+  }
+
+  pub async fn _register_ticker(
+    &self,
+    func: impl Fn(tick::In) -> Pin<Box<dyn Future<Output = tick::Out> + Send + 'static>>
+    + Send
+    + Sync
+    + 'static,
+  ) -> Result<(), ()> {
+    if let Some(me) = &self.me {
+      me.tick.inject(func).await;
+			Ok(())
+		} else {
+			Err(())
     }
   }
 

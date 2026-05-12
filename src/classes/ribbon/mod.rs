@@ -27,7 +27,6 @@ use crate::{
   },
 };
 use bitflags::bitflags;
-use colored::Colorize;
 use tokio::{
   net::TcpStream,
   sync::Mutex,
@@ -89,6 +88,7 @@ bitflags! {
     const FAST_PING = 1 << 3;
     const TIMING_OUT = 1 << 4;
     const DEAD = 1 << 5;
+    const MIGRATING = 1 << 6;
   }
 }
 
@@ -328,15 +328,21 @@ impl Ribbon {
       return;
     }
 
-    let prefix = match level {
-      LogLevel::Info => "[triangle-rs]".blue().to_string(),
-      LogLevel::Warning => "[triangle-rs]".yellow().to_string(),
-      LogLevel::Error => "[triangle-rs]".red().to_string(),
-    };
-    match level {
-      LogLevel::Info => println!("{} {}", prefix, msg),
-      LogLevel::Warning | LogLevel::Error => eprintln!("{} {}", prefix, msg),
-    }
+    // let prefix = match level {
+    //   LogLevel::Info => "[triangle-rs]".blue().to_string(),
+    //   LogLevel::Warning => "[triangle-rs]".yellow().to_string(),
+    //   LogLevel::Error => "[triangle-rs]".red().to_string(),
+    // };
+    // match level {
+    //   LogLevel::Info => println!("{} {}", prefix, msg),
+    //   LogLevel::Warning | LogLevel::Error => eprintln!("{} {}", prefix, msg),
+    // }
+
+		match level {
+			LogLevel::Info => tracing::info!("{}", msg),
+			LogLevel::Warning => tracing::warn!("{}", msg),
+			LogLevel::Error => tracing::error!("{}", msg),
+		}
   }
 
   async fn encode(&self, msg: &str, data: serde_json::Value) -> TransportData {
@@ -407,7 +413,11 @@ impl Ribbon {
       let mut state = self.state.lock().await;
       state.spool = Spool {
         host: spool.host.clone(),
-        endpoint: spool.endpoint.clone(),
+        endpoint: if state.spool.endpoint.is_empty() {
+          spool.endpoint.clone()
+        } else {
+          state.spool.endpoint.clone()
+        },
         token: spool.token.clone(),
         signature: state.spool.signature.clone(),
       };
@@ -424,7 +434,11 @@ impl Ribbon {
 
     self
       .log(
-        &format!("Connecting to <{}/{}>", host, endpoint),
+        &format!(
+          "Connecting to <{}/{}>",
+          host.split(".").into_iter().next().unwrap_or(&host),
+          endpoint
+        ),
         LogLevel::Info,
         false,
       )
@@ -522,17 +536,19 @@ impl Ribbon {
         "data": data,
       }),
     );
-    self
-      .log(
-        &format!(
-          "SEND {} {}",
-          command,
-          serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string())
-        ),
-        LogLevel::Info,
-        false,
-      )
-      .await;
+    if command != "ping" {
+      self
+        .log(
+          &format!(
+            "SEND {} {}",
+            command,
+            serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string())
+          ),
+          LogLevel::Info,
+          false,
+        )
+        .await;
+    }
 
     let packet = self.encode(command, data).await;
 
@@ -680,7 +696,7 @@ impl Ribbon {
         let ribbonid = packet.data["ribbonid"].as_str().unwrap_or("").to_string();
         let tokenid = packet.data["tokenid"].as_str().unwrap_or("").to_string();
 
-        state.flags &= !Flags::CONNECTING;
+        state.flags &= !(Flags::CONNECTING | Flags::MIGRATING);
 
         state.session.ribbon_id = ribbonid;
 
@@ -852,7 +868,7 @@ impl Ribbon {
       let mut state = self.state.lock().await;
 
       state.spool.endpoint = target.to_string();
-      state.flags |= Flags::CONNECTING;
+      state.flags |= Flags::CONNECTING | Flags::MIGRATING;
     }
 
     sleep(Duration::from_millis(5)).await;
@@ -990,6 +1006,16 @@ impl Ribbon {
         Ok(msg) => {
           match msg {
             Message::Close(frame) => {
+              if ribbon
+                .state
+                .lock()
+                .await
+                .flags
+                .intersects(Flags::DEAD | Flags::CONNECTING | Flags::MIGRATING)
+              {
+                return;
+              }
+
               ribbon
                 .log(
                   "Close frame received, closing connection",
@@ -1008,20 +1034,22 @@ impl Ribbon {
             _ => {}
           }
 
-          let decoded = ribbon.decode(match msg {
-            Message::Text(ref s) => s.as_bytes(),
-            Message::Binary(ref b) => b,
-            _ => {
-              ribbon
-                .log(
-                  &format!("Unsupported message: {:?}", msg),
-                  LogLevel::Warning,
-                  false,
-                )
-                .await;
-              continue;
-            } // ignore other message types
-          }).await;
+          let decoded = ribbon
+            .decode(match msg {
+              Message::Text(ref s) => s.as_bytes(),
+              Message::Binary(ref b) => b,
+              _ => {
+                ribbon
+                  .log(
+                    &format!("Unsupported message: {:?}", msg),
+                    LogLevel::Warning,
+                    false,
+                  )
+                  .await;
+                continue;
+              } // ignore other message types
+            })
+            .await;
 
           {
             let mut state = ribbon.state.lock().await;
@@ -1086,13 +1114,6 @@ impl Ribbon {
         } else {
           state.flags &= !Flags::ALIVE;
           let write_open = ribbon.write.lock().await.is_some();
-          ribbon
-            .log(
-              &format!("Sending ping (open: {})", write_open),
-              LogLevel::Info,
-              false,
-            )
-            .await;
           if write_open {
             state.pinger.last = Instant::now();
             drop(state);
@@ -1110,14 +1131,14 @@ impl Ribbon {
     }
   }
 
-	pub async fn set_faster_ping(&self, value: bool) {
-		let mut state = self.state.lock().await;
-		if value {
-			state.flags |= Flags::FAST_PING;
-		} else {
-			state.flags &= !Flags::FAST_PING;
-		}
-	}
+  pub async fn set_faster_ping(&self, value: bool) {
+    let mut state = self.state.lock().await;
+    if value {
+      state.flags |= Flags::FAST_PING;
+    } else {
+      state.flags &= !Flags::FAST_PING;
+    }
+  }
 
   pub async fn wait<T: Event>(&self) -> Option<T> {
     self.emitter.wait::<T>().await
@@ -1134,7 +1155,7 @@ impl Ribbon {
     &self,
     callback: impl Fn(T) + Send + Sync + 'static,
   ) -> tokio::task::JoinHandle<()> {
-    self.emitter.once_fn(callback)
+    self.emitter.once(callback)
   }
 
   pub fn hook(&self) -> Hook {

@@ -1,4 +1,6 @@
-use tokio::select;
+use std::sync::Arc;
+
+use tokio::{select, sync::Mutex};
 
 use crate::{
   classes::{Ribbon, ribbon::WrapError},
@@ -17,7 +19,7 @@ pub struct ProcessedRelationship {
   pub user_avatar: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Relationship {
   ribbon: Ribbon,
 
@@ -25,9 +27,7 @@ pub struct Relationship {
   pub relationship_id: String,
   pub username: String,
   pub avatar: Option<u64>,
-  pub dms: Vec<dm::DM>,
-
-  pub dms_loaded: bool,
+  dms: Arc<Mutex<(bool, Vec<dm::DM>)>>,
 }
 
 pub enum DMError {
@@ -37,7 +37,7 @@ pub enum DMError {
 }
 
 pub async fn send_dm(
-  ribbon: &mut Ribbon,
+  ribbon: &Ribbon,
   recipient_id: &str,
   content: &str,
 ) -> Result<recv::social::DM, DMError> {
@@ -53,7 +53,10 @@ pub async fn send_dm(
   {
     Ok(dm) => Ok(dm),
     Err(e) => match e {
-      WrapError::ParseError => Err(DMError::Error(format!("Failed to parse DM response"))),
+      WrapError::ParseError(e) => Err(DMError::Error(format!(
+        "Failed to parse DM response: {}",
+        e
+      ))),
       WrapError::ServerError => Err(DMError::Error(format!("Connection error while sending DM"))),
       WrapError::Error(event, data) => match event.as_str() {
         "social.dm.fail" => Err(DMError::SendFail(
@@ -71,7 +74,7 @@ pub async fn send_dm(
   }
 }
 
-pub async fn invite(ribbon: &mut Ribbon, recipient_id: &str) -> Result<(), String> {
+pub async fn invite(ribbon: &Ribbon, recipient_id: &str) -> Result<(), String> {
   ribbon.emit(send::social::Invite(recipient_id.into())).await;
 
   select! {
@@ -92,27 +95,42 @@ impl Relationship {
       relationship_id: relationship.original.id.clone(),
       username: relationship.user_username.clone(),
       avatar: relationship.user_avatar,
-      dms: Vec::new(),
-      dms_loaded: false,
+      dms: Arc::new(Mutex::new((false, Vec::new()))),
     }
   }
 
-  pub async fn dm(&mut self, content: &str) -> Result<recv::social::DM, DMError> {
-    send_dm(&mut self.ribbon, &self.user_id, content).await
+  pub async fn dm(&self, content: &str) -> Result<recv::social::DM, DMError> {
+    send_dm(&self.ribbon, &self.user_id, content).await
   }
 
-  pub async fn mark_as_read(&mut self) {
+  pub async fn mark_as_read(&self) {
     self.ribbon.emit(send::social::relation::Ack {}).await;
   }
 
-  pub async fn load_dms(&mut self) -> Result<Vec<dm::DM>, ApiError> {
+  pub async fn load_dms(&self) -> Result<Vec<dm::DM>, ApiError> {
     let dms = self.ribbon.api.social.dms(&self.user_id).await?;
-    self.dms = dms.iter().rev().cloned().collect();
-    self.dms_loaded = true;
+    let mut dms_lock = self.dms.lock().await;
+    dms_lock.1 = dms.iter().rev().cloned().collect();
+    dms_lock.0 = true;
     Ok(dms)
   }
 
-  pub async fn invite(&mut self) -> Result<(), String> {
-    invite(&mut self.ribbon, &self.user_id).await
+	pub async fn dms(&self) -> Vec<dm::DM> {
+    let dms_lock = self.dms.lock().await;
+    dms_lock.1.clone()
+  }
+
+	pub async fn dms_loaded(&self) -> bool {
+		let dms_lock = self.dms.lock().await;
+		dms_lock.0
+	}
+
+	pub async fn _add_dm(&self, dm: dm::DM) {
+		let mut dms_lock = self.dms.lock().await;
+		dms_lock.1.push(dm);
+	}
+
+  pub async fn invite(&self) -> Result<(), String> {
+    invite(&self.ribbon, &self.user_id).await
   }
 }

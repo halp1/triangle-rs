@@ -7,7 +7,9 @@ use tokio::sync::broadcast;
 
 const BROADCAST_CAPACITY: usize = 1024;
 
-pub trait Event: serde::de::DeserializeOwned + serde::Serialize + Clone + Send + 'static {
+pub trait Event:
+  serde::de::DeserializeOwned + serde::Serialize + Clone + std::fmt::Debug + Send + 'static
+{
   const NAME: &'static str;
   fn name(&self) -> &'static str {
     Self::NAME
@@ -17,7 +19,7 @@ pub trait Event: serde::de::DeserializeOwned + serde::Serialize + Clone + Send +
 #[derive(Debug)]
 pub enum WrapError {
   ServerError,
-  ParseError,
+  ParseError(serde_json::Error),
   Error(String, Value),
 }
 
@@ -98,16 +100,20 @@ impl EventEmitter {
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     let Some(mut rx) = self.subscribe() else {
+			tracing::error!("Failed to subscribe to events: no broadcaster available");
       return tokio::spawn(async {});
     };
     tokio::spawn(async move {
       loop {
         match rx.recv().await {
-          Ok((cmd, data)) if cmd == T::NAME => {
-            if let Ok(parsed) = serde_json::from_value::<T>(data) {
+          Ok((cmd, data)) if cmd == T::NAME => match serde_json::from_value::<T>(data) {
+            Ok(parsed) => {
               callback.clone().call(parsed).await;
             }
-          }
+            Err(e) => {
+              tracing::error!("Failed to parse event {}: {}", T::NAME, e);
+            }
+          },
           Ok(_) => {}
           Err(broadcast::error::RecvError::Closed) => break,
           Err(broadcast::error::RecvError::Lagged(_)) => {}
@@ -129,7 +135,7 @@ impl EventEmitter {
     }
   }
 
-  pub fn once_fn<T: Event>(
+  pub fn once<T: Event>(
     &self,
     callback: impl Fn(T) + Send + 'static,
   ) -> tokio::task::JoinHandle<()> {
@@ -141,7 +147,12 @@ impl EventEmitter {
 
   pub async fn wait<T: Event>(&self) -> Option<T> {
     let data = self.once_raw(T::NAME).await?;
-    serde_json::from_value(data).ok()
+    serde_json::from_value::<T>(data)
+      .map_err(|e| {
+        tracing::error!("Failed to parse event {}: {}", T::NAME, e);
+        e
+      })
+      .ok()
   }
 
   pub async fn wrap_with_error<T: Event>(
@@ -159,11 +170,13 @@ impl EventEmitter {
           return Err(WrapError::Error(cmd, data));
         }
         Ok((cmd, data)) if cmd == T::NAME => {
-          if let Ok(parsed) = serde_json::from_value::<T>(data) {
-            return Ok(parsed);
-          } else {
-            return Err(WrapError::ParseError);
-          }
+          return match serde_json::from_value::<T>(data) {
+            Ok(parsed) => Ok(parsed),
+            Err(e) => {
+              tracing::error!("Failed to parse event {}: {}", T::NAME, e);
+              Err(WrapError::ParseError(e))
+            }
+          };
         }
         Ok(_) => {}
         Err(broadcast::error::RecvError::Closed) => return Err(WrapError::ServerError),

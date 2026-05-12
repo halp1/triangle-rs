@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use tokio::{select, sync::Mutex};
 
@@ -10,7 +10,7 @@ use crate::{
   },
   types::{
     events::{recv, send},
-    game::{Handling, SpectatingStrategy},
+    game::{Handling, SpectatingStrategy, tick},
     social::Config as SocialConfig,
   },
   utils::{
@@ -84,7 +84,7 @@ pub struct Client {
   pub room: Arc<Mutex<Option<Room>>>,
   pub game: Arc<Mutex<Option<Game>>>,
   pub api: Arc<Api>,
-  handling: Handling,
+  pub handling: Handling,
   spectating_strategy: SpectatingStrategy,
 }
 
@@ -357,5 +357,29 @@ impl Client {
 
   pub async fn list_rooms(&self) -> Result<Vec<api::rooms::Room>, ApiError> {
     self.api.rooms.list().await
+  }
+
+  pub async fn room(&self) -> Option<Room> {
+    self.room.lock().await.clone()
+  }
+
+  pub async fn game(&self) -> Option<Game> {
+    self.game.lock().await.clone()
+  }
+
+  /// Returns ok if successfully registered, error if failed (e.g. not in game)
+  pub async fn register_ticker(
+    &self,
+    func: impl Fn(tick::In) -> Pin<Box<dyn Future<Output = tick::Out> + Send + 'static>>
+    + Send
+    + Sync
+    + 'static,
+  ) -> Result<(), ()> {
+    if let Some(game) = self.game.lock().await.as_mut() {
+      game._register_ticker(func).await?;
+      Ok(())
+    } else {
+      Err(())
+    }
   }
 }

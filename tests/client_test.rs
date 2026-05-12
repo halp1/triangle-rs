@@ -28,5 +28,5 @@ async fn client_connect() {
     "client.user.username must be non-empty"
   );
 
-  client.ribbon.destroy();
+  client.ribbon.destroy().await;
 }

@@ -21,7 +21,6 @@ use crate::{
       tick::{self, Out},
     },
   },
-  utils::Logger,
 };
 
 pub const MAX_IGE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -37,10 +36,9 @@ pub struct MeState {
   force_pause_iges: bool,
   ige_queue: Vec<ige::IGE>,
   slow_tick_warning: bool,
-  players: Vec<ReadyPlayer>,
+  #[allow(dead_code)]
   is_practice: bool,
   over: bool,
-
   pub engine: Engine,
   pub options: Value, // TODO: swap out
   pub server_targets: Vec<u64>,
@@ -55,9 +53,6 @@ pub struct MeState {
 pub struct Me {
   ribbon: Ribbon,
   hook: Hook,
-  logger: Logger,
-
-  me: ClientUser,
 
   start_hook: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 
@@ -80,8 +75,6 @@ impl Me {
     let s = Self {
       ribbon: ribbon.clone(),
       hook: ribbon.hook(),
-      logger: Logger::new("triangle-rs"),
-      me,
       handles: Arc::new(Mutex::new(Vec::new())),
       start_hook: Arc::new(Mutex::new(Some(start_hook_tx))),
       tick: tick::Ticker(Arc::new(Mutex::new(Box::new(|_| {
@@ -101,7 +94,6 @@ impl Me {
         force_pause_iges: false,
         ige_queue: Vec::new(),
         slow_tick_warning: false,
-        players: players.clone(),
         is_practice: false,
         over: false,
 
@@ -144,7 +136,7 @@ impl Me {
     // TODO: clear self from game
   }
 
-  pub async fn init(&mut self) {
+  pub async fn init(&self) {
     self
       .hook
       .on::<recv::game::Match>(async |_| {
@@ -157,6 +149,7 @@ impl Me {
     self
       .hook
       .on::<recv::game::Start>(async move |_| {
+        tracing::info!("GAME STARTED");
         let m = me.clone();
         me.handles.lock().await.push(tokio::spawn(async move {
           m.start_hook.lock().await.take().map(|tx| tx.send(()).ok());
@@ -164,12 +157,28 @@ impl Me {
       })
       .await;
 
+    tracing::info!("listened for game start");
+
     let me = self.clone();
 
     self
       .hook
       .on::<recv::game::Abort>(async move |_| {
         me.handles.lock().await.drain(..).for_each(|h| h.abort());
+      })
+      .await;
+
+    let me = self.clone();
+
+    self
+      .hook
+      .on::<recv::game::replay::IGE>(async move |ige| {
+        me.state
+          .lock()
+          .await
+          .ige_queue
+          .extend(ige.iges.iter().cloned());
+        me.flush_iges().await;
       })
       .await;
   }
@@ -181,6 +190,8 @@ impl Me {
       if receiver.await.is_err() {
         return;
       }
+
+      tracing::info!("Starting play loop...");
 
       let target = {
         let mut state = me.state.lock().await;
@@ -195,14 +206,19 @@ impl Me {
 
       me.set_target(target).await.ok();
 
-      me.ribbon.emit(recv::client::game::round::Start {
-        ticker: me.tick.clone(),
-        engine: me.state.lock().await.engine.clone(),
-      }).await;
+      me.ribbon.emit(recv::client::game::round::Start {}).await;
+
+      loop {
+        let (continue_game, delay) = me.tick_game().await;
+        if !continue_game {
+          break;
+        }
+        tokio::time::sleep(delay).await;
+      }
     });
   }
 
-  async fn flush_frames(&mut self) -> Vec<replay::Frame> {
+  async fn flush_frames(&self) -> Vec<replay::Frame> {
     let state = self.state.lock().await;
 
     let mut return_frames: Vec<replay::Frame> = state
@@ -249,7 +265,7 @@ impl Me {
   }
 
   /// Returns (continue, delay until next tick. 0 = run instantly)
-  async fn tick_game(&mut self) -> (bool, Duration) {
+  async fn tick_game(&self) -> (bool, Duration) {
     let (snapshot, engine) = {
       let state = self.state.lock().await;
 
@@ -262,7 +278,11 @@ impl Me {
       (snapshot, state.engine.clone())
     };
 
-    let res = (self.tick.0.lock().await)(tick::In { engine, gameid: self.gameid }).await;
+    let res = (self.tick.0.lock().await)(tick::In {
+      engine,
+      gameid: self.gameid,
+    })
+    .await;
 
     {
       let mut state = self.state.lock().await;
@@ -346,12 +366,14 @@ impl Me {
     }
 
     let target = Duration::from_secs_f64((frame + 1) as f64 / FRAMES_PER_SECOND as f64)
-      - start_time.unwrap().elapsed();
+      .saturating_sub(start_time.unwrap().elapsed());
 
     let mut state = self.state.lock().await;
 
     if target.as_secs_f64() <= 2.0 && !state.slow_tick_warning {
-      self.logger.warn("triangle-rs is lagging behind by more than 2 seconds! Your ticker function is likely taking too long to execute.");
+      tracing::warn!(
+        "triangle-rs is lagging behind by more than 2 seconds! Your ticker function is likely taking too long to execute."
+      );
       state.slow_tick_warning = true;
     }
 
@@ -362,12 +384,14 @@ impl Me {
     (true, target.max(Duration::from_micros(50))) // minimum delay of 50µs to prevent runaway loop in case of severe lag
   }
 
-  async fn flush_iges(&mut self) {
+  async fn flush_iges(&self) {
     let iges = {
       let mut state = self.state.lock().await;
       if state.force_pause_iges || (state.pause_iges && !state.key_queue.is_empty()) {
         if state.last_ige_flush.elapsed() >= MAX_IGE_TIMEOUT {
-          self.logger.warn("Force flushing IGE queue to prevent protocol violation + disconnect/ban. You either left force pause iges on for too long or you have pause iges on and continuously keep inputs queued.");
+          tracing::warn!(
+            "Force flushing IGE queue to prevent protocol violation + disconnect/ban. You either left force pause iges on for too long or you have pause iges on and continuously keep inputs queued."
+          );
         } else {
           return;
         }
@@ -382,7 +406,7 @@ impl Me {
     }
   }
 
-  async fn __internal_handle_ige(&mut self, ige: ige::IGE) {
+  async fn __internal_handle_ige(&self, ige: ige::IGE) {
     let mut state = self.state.lock().await;
     let frame = Frame {
       frame: state.engine.frame,
