@@ -338,7 +338,6 @@ pub struct Leaderboard {
   pub active: bool,
   pub naturalorder: i32,
   pub alive: Option<bool>,
-  pub lifetime: i64,
   pub wins: u32,
   pub stats: serde_json::Value,
 }
@@ -473,7 +472,7 @@ pub mod ige {
   }
 
   #[derive(Debug, Clone, Serialize, Deserialize)]
-  struct Player {
+  pub struct Player {
     pub gameid: u64,
   }
 

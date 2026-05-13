@@ -29,7 +29,7 @@ async fn main() {
     ribbon: Some(RibbonOptions {
       options: Some(ribbon::Options {
         debug: true,
-        logging: ribbon::LoggingLevel::All,
+        logging: ribbon::LoggingLevel::Error,
         spooling: true,
       }),
       handling: None,
@@ -90,7 +90,6 @@ async fn main() {
     client
       .register_ticker(|input| {
         Box::pin(async move {
-          println!("Ticker input: {:?}", input);
           tick::Out {
             keys: if input.engine.frame % 60 == 0 {
               vec![

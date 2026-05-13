@@ -32,6 +32,7 @@ use tokio::{
   sync::Mutex,
   time::{Instant, sleep},
 };
+use parking_lot::Mutex as PMutex;
 
 #[derive(Clone, Debug)]
 pub struct Spool {
@@ -213,8 +214,8 @@ struct RibbonReconnectState {
 #[derive(Debug, Clone)]
 pub struct Ribbon {
   write: Arc<Mutex<Option<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>>,
-  config: Arc<Mutex<RibbonConfig>>,
-  state: Arc<Mutex<RibbonState>>,
+  config: Arc<PMutex<RibbonConfig>>,
+  state: Arc<PMutex<RibbonState>>,
   reconnect_state: Arc<Mutex<RibbonReconnectState>>,
   pub api: Arc<Api>,
   pub emitter: EventEmitter,
@@ -255,14 +256,14 @@ impl Ribbon {
 
     let ribbon = Self {
       write: Arc::new(Mutex::new(None)),
-      config: Arc::new(Mutex::new(RibbonConfig {
+      config: Arc::new(PMutex::new(RibbonConfig {
         token: params.token,
         handling: params.handling,
         user_agent: params.user_agent,
         transport: params.transport,
         options: params.options,
       })),
-      state: Arc::new(Mutex::new(RibbonState {
+      state: Arc::new(PMutex::new(RibbonState {
         spool: Spool {
           host: "".to_string(),
           endpoint: "".to_string(),
@@ -322,7 +323,7 @@ impl Ribbon {
       );
     }
 
-    let logging = self.config.lock().await.options.logging;
+    let logging = self.config.lock().options.logging;
 
     if logging == LoggingLevel::None || (logging == LoggingLevel::Error && !force) {
       return;
@@ -348,7 +349,7 @@ impl Ribbon {
   async fn encode(&self, msg: &str, data: serde_json::Value) -> TransportData {
     let start = Instant::now();
 
-    let transport = self.config.lock().await.transport.clone();
+    let transport = self.config.lock().transport.clone();
 
     let res = transport.encode(msg, data);
 
@@ -372,7 +373,7 @@ impl Ribbon {
   async fn decode(&self, data: &[u8]) -> serde_json::Value {
     let start = Instant::now();
 
-    let transport = self.config.lock().await.transport.clone();
+    let transport = self.config.lock().transport.clone();
 
     let res = transport.decode(data);
 
@@ -405,12 +406,12 @@ impl Ribbon {
   }
 
   async fn connect(&self) -> Result<(), ApiError> {
-    let options = self.config.lock().await.options.clone();
+    let options = self.config.lock().options.clone();
 
     let spool = self.api.server.spool(options.spooling).await?;
 
     let (uri, token, had_successful, host, endpoint) = {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       state.spool = Spool {
         host: spool.host.clone(),
         endpoint: if state.spool.endpoint.is_empty() {
@@ -497,14 +498,14 @@ impl Ribbon {
     let (write, read) = stream.split();
 
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       state.flags |= Flags::ALIVE | Flags::SUCCESSFUL;
       state.flags &= !Flags::TIMING_OUT;
     }
 
     self.write.lock().await.replace(write);
 
-    let session = self.state.lock().await.session.clone();
+    let session = self.state.lock().session.clone();
 
     if session.token_id.is_empty() {
       self.pipe("new", serde_json::json!(null)).await;
@@ -597,7 +598,7 @@ impl Ribbon {
       let id = msg["id"].as_u64().map(|v| v as u32);
 
       if let Some(id) = id {
-        let received_id = self.state.lock().await.received_id;
+        let received_id = self.state.lock().received_id;
         if id > received_id {
           let packet = InPacket {
             id: Some(id),
@@ -607,7 +608,7 @@ impl Ribbon {
           if id == received_id + 1 {
             self.run_message(packet).await;
           } else {
-            self.state.lock().await.recv_queue.push(packet);
+            self.state.lock().recv_queue.push(packet);
           }
         }
       } else {
@@ -623,7 +624,7 @@ impl Ribbon {
   }
 
   async fn process_queue(&self) {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
     if state.recv_queue.is_empty() {
       return;
     }
@@ -661,7 +662,7 @@ impl Ribbon {
 
   async fn run_message(&self, packet: InPacket) {
     if let Some(id) = packet.id {
-      self.state.lock().await.received_id = id;
+      self.state.lock().received_id = id;
     }
 
     if packet.command != "ping" && packet.command != "packets" {
@@ -690,8 +691,8 @@ impl Ribbon {
 
     match packet.command.as_str() {
       "session" => {
-        let mut state = self.state.lock().await;
-        let config = self.config.lock().await.clone();
+        let mut state = self.state.lock();
+        let config = self.config.lock().clone();
 
         let ribbonid = packet.data["ribbonid"].as_str().unwrap_or("").to_string();
         let tokenid = packet.data["tokenid"].as_str().unwrap_or("").to_string();
@@ -730,14 +731,14 @@ impl Ribbon {
             .await;
         }
 
-        let mut state = self.state.lock().await;
+        let mut state = self.state.lock();
 
         state.session.token_id = tokenid;
       }
 
       "packets" => {
         for packet in packet.data["packets"].as_array().unwrap_or(&vec![]) {
-          let transport = self.config.lock().await.transport.clone();
+          let transport = self.config.lock().transport.clone();
           match transport {
             Transport::JSON => {
               self.clone().process_message(packet.clone()).await;
@@ -748,7 +749,7 @@ impl Ribbon {
 
       "ping" => {
         let id = packet.data["recvid"].as_u64().map(|v| v as u32);
-        let mut state = self.state.lock().await;
+        let mut state = self.state.lock();
 
         state.pinger.time = Instant::now() - state.pinger.last;
 
@@ -767,7 +768,7 @@ impl Ribbon {
           .unwrap_or("unknown")
           .to_string();
 
-        self.state.lock().await.last_disconnect_reason = "server closed ribbon".into();
+        self.state.lock().last_disconnect_reason = "server closed ribbon".into();
 
         self
           .log(&format!("kicked: {}", reason), LogLevel::Error, true)
@@ -782,7 +783,7 @@ impl Ribbon {
           .unwrap_or("unknown")
           .to_string();
 
-        self.state.lock().await.last_disconnect_reason = reason.clone();
+        self.state.lock().last_disconnect_reason = reason.clone();
 
         self
           .log(
@@ -800,7 +801,7 @@ impl Ribbon {
 
         match data {
           Ok(data) => {
-            let spool = self.state.lock().await.spool.clone();
+            let spool = self.state.lock().spool.clone();
             if data.success {
               self.log("Authorized", LogLevel::Info, false).await;
 
@@ -865,7 +866,7 @@ impl Ribbon {
 
   async fn switch(&self, target: &str) {
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
 
       state.spool.endpoint = target.to_string();
       state.flags |= Flags::CONNECTING | Flags::MIGRATING;
@@ -892,7 +893,7 @@ impl Ribbon {
         write.close().await.ok();
       }
 
-      let flags = self.state.lock().await.flags;
+      let flags = self.state.lock().flags;
 
       if !flags.contains(Flags::DEAD) {
         let ribbon = self.clone();
@@ -926,7 +927,7 @@ impl Ribbon {
 
     reconnect_state.last_reconnect = Instant::now();
 
-    let flags = self.state.lock().await.flags;
+    let flags = self.state.lock().flags;
 
     if reconnect_state.reconnect_count >= 20 || flags.contains(Flags::DEAD) {
       let reason = if flags.contains(Flags::DEAD) {
@@ -960,7 +961,7 @@ impl Ribbon {
   }
 
   pub async fn close(&self, reason: &str) {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
     if !reason.is_empty() {
       state.last_disconnect_reason = reason.to_string();
     }
@@ -981,7 +982,7 @@ impl Ribbon {
       write.close().await.ok();
     }
 
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
 
     state.flags |= Flags::DEAD;
 
@@ -1026,8 +1027,8 @@ impl Ribbon {
 
               let code = frame.as_ref().map(|f| f.code.into()).unwrap_or(0);
               let reason = close_code_reason(code);
-              ribbon.state.lock().await.last_disconnect_reason = reason.into();
-              ribbon.state.lock().await.flags |= Flags::CONNECTING;
+              ribbon.state.lock().last_disconnect_reason = reason.into();
+              ribbon.state.lock().flags |= Flags::CONNECTING;
               ribbon.reconnect().await;
               return;
             }
@@ -1052,7 +1053,7 @@ impl Ribbon {
             .await;
 
           {
-            let mut state = ribbon.state.lock().await;
+            let mut state = ribbon.state.lock();
             state.flags |= Flags::ALIVE;
             state.flags &= !Flags::TIMING_OUT;
           }
@@ -1066,7 +1067,7 @@ impl Ribbon {
               ribbon
                 .log("Connection closed by server", LogLevel::Warning, true)
                 .await;
-              // ribbon.state.lock().await.flags |= Flags::CONNECTING;
+              // ribbon.state.lock().flags |= Flags::CONNECTING;
               // ribbon.reconnect().await;
               return;
             }
@@ -1085,11 +1086,11 @@ impl Ribbon {
     loop {
       tokio::time::sleep(Duration::from_millis(2500)).await;
 
-      if ribbon.state.lock().await.flags.contains(Flags::DEAD) {
+      if ribbon.state.lock().flags.contains(Flags::DEAD) {
         return;
       }
 
-      let mut state = ribbon.state.lock().await;
+      let mut state = ribbon.state.lock();
       state.pinger.heartbeat += 1;
 
       let should_ping =
@@ -1121,7 +1122,7 @@ impl Ribbon {
               .pipe(
                 "ping",
                 serde_json::json!({
-                  "recvid": ribbon.state.lock().await.received_id,
+                  "recvid": ribbon.state.lock().received_id,
                 }),
               )
               .await;
@@ -1132,7 +1133,7 @@ impl Ribbon {
   }
 
   pub async fn set_faster_ping(&self, value: bool) {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
     if value {
       state.flags |= Flags::FAST_PING;
     } else {

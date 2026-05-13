@@ -5,7 +5,9 @@ use std::{
   time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, oneshot};
+use parking_lot::Mutex as PMutex;
 
+use crate::engine::queue::{Queue, QueueInitParams, bag::BagType};
 use crate::{
   Engine,
   classes::{
@@ -40,7 +42,6 @@ pub struct MeState {
   is_practice: bool,
   over: bool,
   pub engine: Engine,
-  pub options: Value, // TODO: swap out
   pub server_targets: Vec<u64>,
   pub enemies: Vec<u64>,
   pub key_queue: Vec<tick::Keypress>,
@@ -54,16 +55,17 @@ pub struct Me {
   ribbon: Ribbon,
   hook: Hook,
 
-  start_hook: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+  start_hook: Arc<PMutex<Option<oneshot::Sender<()>>>>,
 
-  handles: Arc<Mutex<Vec<tokio::task::JoinHandle<()>>>>,
-  pub state: Arc<Mutex<MeState>>,
+  handles: Arc<PMutex<Vec<tokio::task::JoinHandle<()>>>>,
+  pub state: Arc<PMutex<MeState>>,
   pub gameid: u64,
   pub tick: tick::Ticker,
+  pub options: Arc<Value>, // TODO: swap out
 }
 
 impl Me {
-  pub fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
+  pub async fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
     let self_player = players
       .iter()
       .find(|p| p.userid == me.id)
@@ -75,8 +77,8 @@ impl Me {
     let s = Self {
       ribbon: ribbon.clone(),
       hook: ribbon.hook(),
-      handles: Arc::new(Mutex::new(Vec::new())),
-      start_hook: Arc::new(Mutex::new(Some(start_hook_tx))),
+      handles: Arc::new(PMutex::new(Vec::new())),
+      start_hook: Arc::new(PMutex::new(Some(start_hook_tx))),
       tick: tick::Ticker(Arc::new(Mutex::new(Box::new(|_| {
         Box::pin(async {
           Out {
@@ -86,7 +88,7 @@ impl Me {
         })
       })))),
 
-      state: Arc::new(Mutex::new(MeState {
+      state: Arc::new(PMutex::new(MeState {
         frame_queue: Vec::new(),
         incoming_garbage: Vec::new(),
         target: TargetingStrategy::Even,
@@ -102,7 +104,6 @@ impl Me {
           self_player.gameid,
           players.clone().as_slice(),
         ),
-        options: self_player.options,
         server_targets: Vec::new(),
         enemies: Vec::new(),
         key_queue: Vec::new(),
@@ -111,10 +112,12 @@ impl Me {
         last_ige_flush: Instant::now(),
       })),
 
+      options: Arc::new(self_player.options),
+
       gameid: self_player.gameid,
     };
 
-    s.start(start_hook_rx);
+    s.start(start_hook_rx).await;
 
     s
   }
@@ -122,18 +125,15 @@ impl Me {
   pub async fn destroy(&mut self) {
     self.hook.destroy().await;
 
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
 
     state.over = true;
-    // state.engine.events.clear();
-    // TODO: clear engine events
+    state.engine.events.destroy();
 
-    let mut handles = self.handles.lock().await;
+    let mut handles = self.handles.lock();
     for handle in handles.drain(..) {
       handle.abort();
     }
-
-    // TODO: clear self from game
   }
 
   pub async fn init(&self) {
@@ -149,22 +149,26 @@ impl Me {
     self
       .hook
       .on::<recv::game::Start>(async move |_| {
-        tracing::info!("GAME STARTED");
         let m = me.clone();
-        me.handles.lock().await.push(tokio::spawn(async move {
-          m.start_hook.lock().await.take().map(|tx| tx.send(()).ok());
+        tokio::time::sleep(Duration::from_millis(
+          me.options["countdown_count"].as_u64().unwrap_or(0)
+            * me.options["countdown_interval"].as_u64().unwrap_or(0)
+            + me.options["precountdown"].as_u64().unwrap_or(0)
+            + me.options["prestart"].as_u64().unwrap_or(0),
+        ))
+        .await;
+        me.handles.lock().push(tokio::spawn(async move {
+          m.start_hook.lock().take().map(|tx| tx.send(()).ok());
         }));
       })
       .await;
-
-    tracing::info!("listened for game start");
 
     let me = self.clone();
 
     self
       .hook
       .on::<recv::game::Abort>(async move |_| {
-        me.handles.lock().await.drain(..).for_each(|h| h.abort());
+        me.handles.lock().drain(..).for_each(|h| h.abort());
       })
       .await;
 
@@ -183,22 +187,22 @@ impl Me {
       .await;
   }
 
-  fn start(&self, receiver: oneshot::Receiver<()>) {
+  async fn start(&self, receiver: oneshot::Receiver<()>) {
     let me = self.clone();
+    let handles = me.handles.clone();
 
-    tokio::spawn(async move {
+    handles.lock().push(tokio::spawn(async move {
       if receiver.await.is_err() {
         return;
       }
 
-      tracing::info!("Starting play loop...");
-
       let target = {
-        let mut state = me.state.lock().await;
+        let mut state = me.state.lock();
         state.frame_queue.push(replay::Frame {
           frame: 0,
           data: FrameData::Start(replay::Start(json!({}))),
         });
+        state.frame_queue.push(me.get_full_frame());
         state.start_time = Some(Instant::now());
 
         state.target.clone()
@@ -213,13 +217,15 @@ impl Me {
         if !continue_game {
           break;
         }
-        tokio::time::sleep(delay).await;
+        if delay.as_secs_f64() > 0.0 {
+          tokio::time::sleep(delay).await;
+        }
       }
-    });
+    }));
   }
 
   async fn flush_frames(&self) -> Vec<replay::Frame> {
-    let state = self.state.lock().await;
+    let state = self.state.lock();
 
     let mut return_frames: Vec<replay::Frame> = state
       .frame_queue
@@ -235,7 +241,7 @@ impl Me {
       });
     }
 
-    if !state.options["manual_allowed"].as_bool().unwrap_or(false) {
+    if !self.options["manual_allowed"].as_bool().unwrap_or(false) {
       return_frames.retain(|f| match &f.data {
         FrameData::ManualTarget(_) => false,
         _ => true,
@@ -267,7 +273,7 @@ impl Me {
   /// Returns (continue, delay until next tick. 0 = run instantly)
   async fn tick_game(&self) -> (bool, Duration) {
     let (snapshot, engine) = {
-      let state = self.state.lock().await;
+      let state = self.state.lock();
 
       if state.over {
         return (false, Duration::from_secs(0));
@@ -285,7 +291,7 @@ impl Me {
     .await;
 
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       state.engine.from_snapshot(&snapshot);
 
       state.key_queue.extend(res.keys);
@@ -300,7 +306,7 @@ impl Me {
     self.flush_iges().await;
 
     let (frame, start_time) = {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
 
       let mut keys = Vec::new();
 
@@ -367,10 +373,16 @@ impl Me {
 
     let target = Duration::from_secs_f64((frame + 1) as f64 / FRAMES_PER_SECOND as f64)
       .saturating_sub(start_time.unwrap().elapsed());
+    let lag_back = start_time
+      .unwrap()
+      .elapsed()
+      .saturating_sub(Duration::from_secs_f64(
+        (frame + 1) as f64 / FRAMES_PER_SECOND as f64,
+      ));
 
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
 
-    if target.as_secs_f64() <= 2.0 && !state.slow_tick_warning {
+    if lag_back.as_secs_f64() >= 2.0 && !state.slow_tick_warning {
       tracing::warn!(
         "triangle-rs is lagging behind by more than 2 seconds! Your ticker function is likely taking too long to execute."
       );
@@ -386,7 +398,7 @@ impl Me {
 
   async fn flush_iges(&self) {
     let iges = {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       if state.force_pause_iges || (state.pause_iges && !state.key_queue.is_empty()) {
         if state.last_ige_flush.elapsed() >= MAX_IGE_TIMEOUT {
           tracing::warn!(
@@ -407,7 +419,7 @@ impl Me {
   }
 
   async fn __internal_handle_ige(&self, ige: ige::IGE) {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
     let frame = Frame {
       frame: state.engine.frame,
       data: FrameData::IGE(ige.clone()),
@@ -434,12 +446,12 @@ impl Me {
   }
 
   pub async fn set_target(&self, target: TargetingStrategy) -> Result<(), String> {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
 
     if !state.can_target {
       return Err("Targeting is currently disabled by the server".to_string());
     }
-    if !state.options["manual_allowed"].as_bool().unwrap_or(false)
+    if !self.options["manual_allowed"].as_bool().unwrap_or(false)
       && matches!(target, TargetingStrategy::Manual(_))
     {
       return Err("Manual targeting is not allowed in this game".to_string());
@@ -463,7 +475,7 @@ impl Me {
 
   pub async fn set_pause_iges(&mut self, pause: bool) {
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       state.pause_iges = pause;
     };
 
@@ -472,10 +484,177 @@ impl Me {
 
   pub async fn set_force_pause_iges(&mut self, force_pause: bool) {
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       state.force_pause_iges = force_pause;
     };
 
     self.flush_iges().await;
+  }
+
+  pub fn get_full_frame(&self) -> replay::Frame {
+    let options = &*self.options;
+
+    let boardheight = options
+      .get("boardheight")
+      .and_then(Value::as_u64)
+      .unwrap_or(20) as usize;
+    let boardwidth = options
+      .get("boardwidth")
+      .and_then(Value::as_u64)
+      .unwrap_or(10) as usize;
+    let seed = options.get("seed").and_then(Value::as_i64).unwrap_or(0);
+    let bagtype_str = options
+      .get("bagtype")
+      .and_then(Value::as_str)
+      .unwrap_or("7-bag");
+
+    let bag_kind = match bagtype_str {
+      "7-bag" | "bag7" => BagType::Bag7,
+      "14-bag" | "bag14" => BagType::Bag14,
+      "classic" => BagType::Classic,
+      "pairs" => BagType::Pairs,
+      "total mayhem" => BagType::TotalMayhem,
+      "7+1" => BagType::Bag7Plus1,
+      "7+2" => BagType::Bag7Plus2,
+      "7+X" | "7+x" => BagType::Bag7PlusX,
+      _ => BagType::Bag7,
+    };
+
+    let queue = Queue::new(QueueInitParams {
+      seed,
+      kind: bag_kind,
+      min_length: 7,
+    });
+
+    let bag = queue.as_slice();
+
+    let board: Vec<Value> = (0..(boardheight + 20))
+      .map(|_| {
+        let row: Vec<Value> = (0..boardwidth).map(|_| Value::Null).collect();
+        Value::Array(row)
+      })
+      .collect();
+
+    let handling = options.get("handling").cloned().unwrap_or(json!({}));
+    let g = options.get("g").and_then(Value::as_f64).unwrap_or(0.02);
+
+    replay::Frame {
+      frame: 0,
+      data: FrameData::Full(replay::Full {
+        game: json!({
+          "board": board,
+          "bag": bag,
+          "hold": {
+            "piece": null,
+            "locked": false
+          },
+          "g": g,
+          "controlling": {
+            "lShift": {
+              "held": false,
+              "arr": 0,
+              "das": 0,
+              "dir": -1
+            },
+            "rShift": {
+              "held": false,
+              "arr": 0,
+              "das": 0,
+              "dir": 1
+            },
+            "lastshift": -1,
+            "inputSoftdrop": false
+          },
+          "falling": {
+            "type": "i",
+            "x": 0,
+            "y": 0,
+            "r": 0,
+            "hy": 0,
+            "irs": 0,
+            "kick": 0,
+            "keys": 0,
+            "flags": 0,
+            "safelock": 0,
+            "locking": 0,
+            "lockresets": 0,
+            "rotresets": 0,
+            "skip": []
+          },
+          "handling": handling,
+          "playing": true
+        }),
+        stats: json!({
+          "lines": 0,
+          "level_lines": 0,
+          "level_lines_needed": 1,
+          "inputs": 0,
+          "holds": 0,
+          "score": 0,
+          "zenlevel": 1,
+          "zenprogress": 0,
+          "level": 1,
+          "combo": 0,
+          "topcombo": 0,
+          "combopower": 0,
+          "btb": 0,
+          "topbtb": 0,
+          "btbpower": 0,
+          "tspins": 0,
+          "piecesplaced": 0,
+          "clears": {
+            "singles": 0,
+            "doubles": 0,
+            "triples": 0,
+            "quads": 0,
+            "pentas": 0,
+            "realtspins": 0,
+            "minitspins": 0,
+            "minitspinsingles": 0,
+            "tspinsingles": 0,
+            "minitspindoubles": 0,
+            "tspindoubles": 0,
+            "minitspintriples": 0,
+            "tspintriples": 0,
+            "minitspinquads": 0,
+            "tspinquads": 0,
+            "tspinpentas": 0,
+            "allclear": 0
+          },
+          "garbage": {
+            "sent": 0,
+            "sent_nomult": 0,
+            "maxspike": 0,
+            "maxspike_nomult": 0,
+            "received": 0,
+            "attack": 0,
+            "cleared": 0
+          },
+          "kills": 0,
+          "finesse": {
+            "combo": 0,
+            "faults": 0,
+            "perfectpieces": 0
+          },
+          "zenith": {
+            "altitude": 0,
+            "rank": 1,
+            "peakrank": 1,
+            "avgrankpts": 0,
+            "floor": 0,
+            "targetingfactor": 3,
+            "targetinggrace": 0,
+            "totalbonus": 0,
+            "revives": 0,
+            "revivesTotal": 0,
+            "revivesMaxOfBoth": 0,
+            "speedrun": false,
+            "speedrun_seen": false,
+            "splits": [0, 0, 0, 0, 0, 0, 0, 0, 0]
+          }
+        }),
+        diyusi: 0,
+      }),
+    }
   }
 }

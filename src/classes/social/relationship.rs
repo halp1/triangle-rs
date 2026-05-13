@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use tokio::{select, sync::Mutex};
+use parking_lot::Mutex;
+use tokio::select;
 
 use crate::{
   classes::{Ribbon, ribbon::WrapError},
@@ -109,24 +110,24 @@ impl Relationship {
 
   pub async fn load_dms(&self) -> Result<Vec<dm::DM>, ApiError> {
     let dms = self.ribbon.api.social.dms(&self.user_id).await?;
-    let mut dms_lock = self.dms.lock().await;
+    let mut dms_lock = self.dms.lock();
     dms_lock.1 = dms.iter().rev().cloned().collect();
     dms_lock.0 = true;
     Ok(dms)
   }
 
 	pub async fn dms(&self) -> Vec<dm::DM> {
-    let dms_lock = self.dms.lock().await;
+    let dms_lock = self.dms.lock();
     dms_lock.1.clone()
   }
 
 	pub async fn dms_loaded(&self) -> bool {
-		let dms_lock = self.dms.lock().await;
+		let dms_lock = self.dms.lock();
 		dms_lock.0
 	}
 
 	pub async fn _add_dm(&self, dm: dm::DM) {
-		let mut dms_lock = self.dms.lock().await;
+		let mut dms_lock = self.dms.lock();
 		dms_lock.1.push(dm);
 	}
 

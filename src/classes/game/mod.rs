@@ -4,6 +4,7 @@ use std::{collections::HashMap, pin::Pin};
 use futures_util::future::join_all;
 use serde_json::Value;
 use tokio::sync::Mutex;
+use parking_lot::Mutex as PMutex;
 
 use crate::types::game::tick;
 use crate::{
@@ -126,7 +127,7 @@ fn parse_mino_array(v: &Value) -> Vec<Mino> {
 #[derive(Debug, Clone)]
 pub struct GameState {
   pub strategy: SpectatingStrategy,
-  pub spectating_loop_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>, // very cursed, maybe a better way?
+  pub spectating_loop_handle: Arc<PMutex<Option<tokio::task::JoinHandle<()>>>>, // very cursed, maybe a better way?
   pub spectate_warning_counter: u64,
   pub players: Vec<Player>,
 }
@@ -137,7 +138,7 @@ pub struct Game {
   hook: Hook,
 
   pub me: Option<Me>,
-  pub state: Arc<Mutex<GameState>>,
+  pub state: Arc<PMutex<GameState>>,
   pub raw_players: Arc<Vec<ReadyPlayer>>,
 }
 
@@ -148,10 +149,13 @@ impl Game {
     raw_players: Vec<ReadyPlayer>,
     strategy: SpectatingStrategy,
   ) -> Self {
-    let me = raw_players
-      .iter()
-      .find(|p| p.userid == user.id)
-      .map(|_| Me::new(ribbon.clone(), user.clone(), raw_players.clone()));
+    let me_in_game = raw_players.iter().find(|p| p.userid == user.id).is_some();
+
+    let me = if me_in_game {
+      Some(Me::new(ribbon.clone(), user.clone(), raw_players.clone()).await)
+    } else {
+      None
+    };
 
     let players = join_all(
       raw_players
@@ -166,9 +170,9 @@ impl Game {
       ribbon: ribbon.clone(),
       hook: ribbon.hook(),
       me,
-      state: Arc::new(Mutex::new(GameState {
+      state: Arc::new(PMutex::new(GameState {
         strategy,
-        spectating_loop_handle: Arc::new(Mutex::new(None)),
+        spectating_loop_handle: Arc::new(PMutex::new(None)),
         spectate_warning_counter: 0,
         players,
       })),
@@ -177,10 +181,8 @@ impl Game {
 
     s.start_spectating_loop().await;
 
-    tracing::info!("game started, me present: {}", s.me.is_some());
     if let Some(me) = &s.me {
       me.init().await;
-      tracing::info!("me initialized");
     }
 
     s
@@ -189,16 +191,16 @@ impl Game {
   async fn start_spectating_loop(&self) {
     let game = self.clone();
 
-    self.state.lock().await.spectating_loop_handle.lock().await.replace(tokio::task::spawn(async move {
+    self.state.lock().spectating_loop_handle.lock().replace(tokio::task::spawn(async move {
 			loop {
 				let start = std::time::Instant::now();
 
-				for player in game.state.lock().await.players.clone() {
+				for player in game.state.lock().players.clone() {
 					player._tick().await;
 				}
 
 				if start.elapsed() > std::time::Duration::from_millis(1000 / FRAMES_PER_SECOND - 1) {
-					let mut state = game.state.lock().await;
+					let mut state = game.state.lock();
 					state.spectate_warning_counter += 1;
 					if state.spectate_warning_counter == 5 {
 						tracing::warn!(
@@ -206,17 +208,17 @@ impl Game {
 						);
 					}
 				} else {
-					game.state.lock().await.spectate_warning_counter = 0;
+					game.state.lock().spectate_warning_counter = 0;
 				}
 
-				tokio::time::sleep((std::time::Duration::from_millis(1000 / FRAMES_PER_SECOND) - start.elapsed()).max(std::time::Duration::from_micros(50))).await;
+				tokio::time::sleep((std::time::Duration::from_millis(1000 / FRAMES_PER_SECOND).saturating_sub(start.elapsed())).max(std::time::Duration::from_micros(50))).await;
 			}
 		}));
   }
 
   pub async fn _set_spectating_strategy(&self, strategy: SpectatingStrategy) {
-    self.state.lock().await.strategy = strategy;
-    for player in self.state.lock().await.players.clone() {
+    self.state.lock().strategy = strategy;
+    for player in self.state.lock().players.clone() {
       player._set_spectating_strategy(strategy).await;
     }
   }
@@ -661,7 +663,7 @@ impl Game {
 
   pub async fn spectate(&self, target: SpectateTarget) -> Result<(), Vec<usize>> {
     let players = {
-      let state = self.state.lock().await;
+      let state = self.state.lock();
       state.players.clone()
     };
 
@@ -708,7 +710,7 @@ impl Game {
 
   pub async fn unspectate(&self, target: SpectateTarget) -> Result<(), Vec<usize>> {
     let players = {
-      let state = self.state.lock().await;
+      let state = self.state.lock();
       state.players.clone()
     };
 
@@ -758,9 +760,9 @@ impl Game {
   ) -> Result<(), ()> {
     if let Some(me) = &self.me {
       me.tick.inject(func).await;
-			Ok(())
-		} else {
-			Err(())
+      Ok(())
+    } else {
+      Err(())
     }
   }
 
@@ -770,7 +772,7 @@ impl Game {
       self.me = None;
     }
 
-    let players = self.state.lock().await.players.clone();
+    let players = self.state.lock().players.clone();
 
     for mut player in players {
       player.destroy().await;

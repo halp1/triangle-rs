@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, MutexGuard, oneshot};
+use tokio::sync::oneshot;
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::{
   Engine,
@@ -80,7 +81,7 @@ impl Player {
           return;
         }
 
-        let mut state = state.lock().await;
+        let mut state = state.lock();
 
         let initializer = state.engine.initializer.clone();
 
@@ -113,7 +114,7 @@ impl Player {
     player
       .hook
       .on::<recv::game::Replay>(async move |event| {
-        let mut state = state.lock().await;
+        let mut state = state.lock();
         if event.gameid != gameid
           || state.state != SpectatingState::Active
           || state.engine.topped_out()
@@ -130,7 +131,7 @@ impl Player {
 
   pub async fn spectate(&self) -> Result<(), String> {
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
 
       if state.state == SpectatingState::Active {
         return Ok(());
@@ -148,7 +149,7 @@ impl Player {
 
     let rx = {
       let (tx, rx) = oneshot::channel();
-      self.state.lock().await.resolvers.push(tx);
+      self.state.lock().resolvers.push(tx);
       rx
     };
 
@@ -160,7 +161,7 @@ impl Player {
 
   pub async fn unspectate(&self) {
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
       if state.state == SpectatingState::Inactive {
         return;
       }
@@ -172,7 +173,7 @@ impl Player {
 
   pub async fn destroy(&mut self) {
     {
-      let mut state = self.state.lock().await;
+      let mut state = self.state.lock();
 
       state.resolvers.drain(..).for_each(|resolver| {
         resolver
@@ -200,7 +201,7 @@ impl Player {
   }
 
   pub async fn _tick(&self) {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
     if state.state != SpectatingState::Active {
       return;
     }
@@ -245,7 +246,7 @@ impl Player {
   }
 
   pub async fn _set_spectating_strategy(&self, strategy: SpectatingStrategy) {
-    let mut state = self.state.lock().await;
+    let mut state = self.state.lock();
     state.strategy = strategy;
   }
 }

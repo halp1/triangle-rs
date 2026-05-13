@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use serde_json::Value;
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
+use tokio::sync::Mutex as TMutex;
 
 use crate::{
   classes::{ClientUser, Ribbon, game::Game, ribbon},
@@ -55,7 +56,7 @@ pub struct RoomState {
 pub struct Room {
   ribbon: Ribbon,
   hook: ribbon::Hook,
-  game: Arc<Mutex<Option<Game>>>,
+  game: Arc<TMutex<Option<Game>>>,
   me: ClientUser,
 
   pub state: Arc<Mutex<RoomState>>,
@@ -64,7 +65,7 @@ pub struct Room {
 impl Room {
   pub async fn new(
     ribbon: Ribbon,
-    game: Arc<Mutex<Option<Game>>>,
+    game: Arc<TMutex<Option<Game>>>,
     me: ClientUser,
     update: recv::room::Update,
     spectating_strategy: SpectatingStrategy,
@@ -114,7 +115,7 @@ impl Room {
   }
 
   async fn handle_update(state: Arc<Mutex<RoomState>>, update: recv::room::Update) {
-    let mut state = state.lock().await;
+    let mut state = state.lock();
     state.id = update.id;
     state.public = update.public;
     state.room_type = update.r#type;
@@ -152,11 +153,11 @@ impl Room {
     self
       .hook
       .on::<recv::room::update::Host>(async move |event| {
-        state.lock().await.owner = event.0;
+        state.lock().owner = event.0;
 
         ribbon
           .emit(send::client::room::Players(
-            state.lock().await.players.clone(),
+            state.lock().players.clone(),
           ))
           .await;
       })
@@ -166,7 +167,7 @@ impl Room {
     self
       .hook
       .on::<recv::room::update::Auto>(async move |event| {
-        state.lock().await.auto = event;
+        state.lock().auto = event;
       })
       .await;
 
@@ -185,11 +186,11 @@ impl Room {
     self
       .hook
       .on::<recv::room::player::Add>(async move |event| {
-        state.lock().await.players.push(event.0);
+        state.lock().players.push(event.0);
 
         ribbon
           .emit(send::client::room::Players(
-            state.lock().await.players.clone(),
+            state.lock().players.clone(),
           ))
           .await;
       })
@@ -201,11 +202,11 @@ impl Room {
     self
       .hook
       .on::<recv::room::player::Remove>(async move |event| {
-        state.lock().await.players.retain(|p| p.id != event.0);
+        state.lock().players.retain(|p| p.id != event.0);
 
         ribbon
           .emit(send::client::room::Players(
-            state.lock().await.players.clone(),
+            state.lock().players.clone(),
           ))
           .await;
       })
@@ -219,9 +220,7 @@ impl Room {
     self
       .hook
       .on::<recv::game::Ready>(async move |data| {
-        tracing::info!("Game ready, initializing game state...");
-
-        let spectating_strategy = state.lock().await.spectating_strategy.clone();
+        let spectating_strategy = state.lock().spectating_strategy.clone();
         let g = Game::new(
           ribbon.clone(),
           me,
@@ -230,16 +229,14 @@ impl Room {
         )
         .await;
 
-        tracing::info!("game initialized");
-
-        game.lock().await.replace(g);
+        game.lock().replace(g);
 
         if data.is_new {
-          state.lock().await.game_start = Some(std::time::Instant::now());
+          state.lock().game_start = Some(std::time::Instant::now());
 
           // TODO: replay generator
 
-          let r#match = state.lock().await.match_config.clone();
+          let r#match = state.lock().match_config.clone();
 
           ribbon
             .emit(send::client::game::Start {
@@ -276,7 +273,7 @@ impl Room {
       .on::<recv::game::replay::End>(async move |data| {
         let mut me = {
           // TODO: die in replay generator
-          let game = game.lock().await;
+          let game = game.lock();
           let gameid = game.as_ref().and_then(|g| g.me.as_ref().map(|m| m.gameid));
           if game.is_none() || gameid.map_or(true, |p| p != data.gameid) {
             return;
@@ -300,7 +297,7 @@ impl Room {
       .on::<recv::game::Advance>(async move |_| {
         // TODO: end round in replay generator
 
-        if let Some(mut game) = game.lock().await.take() {
+        if let Some(mut game) = game.lock().take() {
           game.destroy().await;
           ribbon.emit(send::client::game::Over::End).await;
         }
@@ -313,7 +310,7 @@ impl Room {
     self
       .hook
       .on::<recv::game::Score>(async move |data| {
-        if let Some(mut g) = game.lock().await.take() {
+        if let Some(mut g) = game.lock().take() {
           g.destroy().await;
         }
 
@@ -338,7 +335,7 @@ impl Room {
 
         ribbon.emit(send::client::game::Abort).await;
 
-        if let Some(mut g) = game.lock().await.take() {
+        if let Some(mut g) = game.lock().take() {
           g.destroy().await;
           ribbon.emit(send::client::game::Over::Abort).await;
         }
@@ -356,7 +353,7 @@ impl Room {
       .hook
       .on::<recv::game::End>(async move |data| {
         let (use_scoreboard, game_start, match_config) = {
-          let s = state.lock().await;
+          let s = state.lock();
           (
             s.match_config.ft == 1 && s.match_config.wb == 1,
             s.game_start,
@@ -425,7 +422,7 @@ impl Room {
 
         ribbon.emit(end_event).await;
 
-        if let Some(mut g) = game.lock().await.take() {
+        if let Some(mut g) = game.lock().take() {
           g.destroy().await;
           ribbon.emit(send::client::game::Over::End).await;
         }
@@ -437,7 +434,7 @@ impl Room {
     self
       .hook
       .on::<recv::room::Chat>(async move |event| {
-        state.lock().await.chats.push(event);
+        state.lock().chats.push(event);
       })
       .await;
 
@@ -449,7 +446,7 @@ impl Room {
       .hook
       .on::<recv::room::Leave>(async move |_| {
         hook.destroy().await;
-        if let Some(mut game) = game.lock().await.take() {
+        if let Some(mut game) = game.lock().take() {
           game.destroy().await;
           drop(game);
           ribbon.emit(send::client::game::Over::Leave).await;
@@ -465,7 +462,7 @@ impl Room {
       .hook
       .on::<recv::room::Kick>(async move |_| {
         hook.destroy().await;
-        if let Some(mut game) = game.lock().await.take() {
+        if let Some(mut game) = game.lock().take() {
           game.destroy().await;
           drop(game);
           ribbon.emit(send::client::game::Over::Leave).await;
@@ -483,7 +480,7 @@ impl Room {
   }
 
   pub async fn state(&self) -> RoomState {
-    let state = self.state.lock().await.clone();
+    let state = self.state.lock().clone();
     state
   }
 
@@ -647,8 +644,8 @@ impl Room {
   }
 
   pub async fn _set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
-    self.state.lock().await.spectating_strategy = strategy.clone();
-    if let Some(game) = self.game.lock().await.as_ref().clone() {
+    self.state.lock().spectating_strategy = strategy.clone();
+    if let Some(game) = self.game.lock().as_ref().clone() {
       game._set_spectating_strategy(strategy).await;
     }
   }

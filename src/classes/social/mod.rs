@@ -1,7 +1,7 @@
 pub mod relationship;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 
 use crate::{
   classes::{
@@ -105,7 +105,7 @@ impl Social {
     self
       .ribbon
       .on::<recv::social::Online>(async move |data| {
-        let mut online = online.lock().await;
+        let mut online = online.lock();
         *online = data.0;
       })
       .await;
@@ -119,7 +119,7 @@ impl Social {
     self
       .ribbon
       .on::<recv::social::Notification>(async move |n| {
-        let mut notifications = notifications.lock().await;
+        let mut notifications = notifications.lock();
         notifications.insert(0, n.clone());
 
         if auto_process_notifications {
@@ -136,7 +136,7 @@ impl Social {
                   })
                   .await;
 
-                let mut other = other.lock().await;
+                let mut other = other.lock();
                 if !other.iter().any(|r| r.user_id == processed.user_id) {
                   other.push(Relationship::new(
                     ribbon.clone(),
@@ -171,8 +171,8 @@ impl Social {
         }
 
         let user = {
-          let other = other.lock().await;
-          let friends = friends.lock().await;
+          let other = other.lock();
+          let friends = friends.lock();
 
           other
             .iter()
@@ -216,7 +216,7 @@ impl Social {
               },
             );
 
-            other.lock().await.push(new_rel);
+            other.lock().push(new_rel);
 
             username = u.username;
           } else {
@@ -240,7 +240,7 @@ impl Social {
       .await;
 
     if self.config.auto_process_notifications {
-      for n in self.notifications.lock().await.clone().iter() {
+      for n in self.notifications.lock().clone().iter() {
         if !n.seen {
           if n.notification_type == "friend" {
             if let Some(rel) = n.data.get("relationship") {
@@ -265,7 +265,7 @@ impl Social {
 
   /// total number of online players, updated by `social.online` events
   pub async fn online(&self) -> u32 {
-    *self.online.lock().await
+    *self.online.lock()
   }
 
   pub async fn mark_notifications_as_read(&mut self) {
@@ -305,7 +305,7 @@ impl Social {
     }
     self.ribbon.api.social.friend(user_id).await?;
 
-    self.friends.lock().await.push(Relationship::new(
+    self.friends.lock().push(Relationship::new(
       self.ribbon.clone(),
       relationship::ProcessedRelationship {
         original: rel::Relationship {
@@ -346,37 +346,37 @@ impl Social {
 
     self.ribbon.api.social.unfriend(user_id).await?;
 
-    self.friends.lock().await.retain(|f| f.user_id != user_id);
+    self.friends.lock().retain(|f| f.user_id != user_id);
     Ok(true)
   }
 
   pub async fn block(&mut self, user_id: &str) -> Result<bool, ApiError> {
-    if self.blocked.lock().await.iter().any(|b| b.id == user_id) {
+    if self.blocked.lock().iter().any(|b| b.id == user_id) {
       return Ok(false);
     }
 
     self.ribbon.api.social.block(user_id).await?;
 
-    self.blocked.lock().await.push(Blocked {
+    self.blocked.lock().push(Blocked {
       id: user_id.into(),
       username: user_id.into(),
       avatar: None,
     });
 
     // also unfriend if they're a friend
-    self.friends.lock().await.retain(|f| f.user_id != user_id);
+    self.friends.lock().retain(|f| f.user_id != user_id);
 
     Ok(true)
   }
 
   pub async fn unblock(&mut self, user_id: &str) -> Result<bool, ApiError> {
-    if self.blocked.lock().await.iter().all(|b| b.id != user_id) {
+    if self.blocked.lock().iter().all(|b| b.id != user_id) {
       return Ok(false);
     }
 
     self.ribbon.api.social.unblock(user_id).await?;
 
-    self.blocked.lock().await.retain(|b| b.id != user_id);
+    self.blocked.lock().retain(|b| b.id != user_id);
 
     Ok(true)
   }

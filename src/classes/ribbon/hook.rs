@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 
 use crate::utils::{
   EventEmitter,
@@ -34,13 +34,13 @@ impl Hook {
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> &Self {
     let handle = self.emitter.on(callback);
-    self.handles.lock().await.push(handle);
+    self.handles.lock().push(handle);
     self
   }
 
   pub async fn once<T: Event>(&self, callback: impl Fn(T) + Send + 'static) -> &Self {
     let handle = self.emitter.once(callback);
-    self.handles.lock().await.push(handle);
+    self.handles.lock().push(handle);
     self
   }
 
@@ -49,7 +49,7 @@ impl Hook {
   }
 
   pub async fn destroy(&self) {
-    for handle in self.handles.lock().await.drain(..) {
+    for handle in self.handles.lock().drain(..) {
       handle.abort();
     }
   }
@@ -63,12 +63,12 @@ impl Drop for Hook {
     let handles = self.handles.clone();
     if let Ok(rt) = tokio::runtime::Handle::try_current() {
       rt.spawn(async move {
-        for handle in handles.lock().await.drain(..) {
+        for handle in handles.lock().drain(..) {
           handle.abort();
         }
       });
     } else {
-      if let Ok(mut guard) = self.handles.try_lock() {
+      if let Some(mut guard) = self.handles.try_lock() {
         for handle in guard.drain(..) {
           handle.abort();
         }
