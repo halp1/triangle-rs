@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use tokio::sync::oneshot;
 use parking_lot::{Mutex, MutexGuard};
+use tokio::sync::oneshot;
 
 use crate::{
   Engine,
@@ -9,7 +9,7 @@ use crate::{
   types::{
     events::{recv, send},
     game::{ReadyPlayer, ReplayState, SpectatingStrategy, replay::Frame},
-  }
+  },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,7 +172,7 @@ impl Player {
   }
 
   pub async fn destroy(&mut self) {
-    {
+    let is_active = {
       let mut state = self.state.lock();
 
       state.resolvers.drain(..).for_each(|resolver| {
@@ -181,10 +181,11 @@ impl Player {
           .ok();
       });
 
-      if state.state != SpectatingState::Inactive {
-        drop(state);
-        self.unspectate().await;
-      }
+      state.state != SpectatingState::Inactive
+    };
+
+    if is_active {
+      self.unspectate().await;
     }
 
     self.hook.destroy().await;

@@ -27,12 +27,12 @@ use crate::{
   },
 };
 use bitflags::bitflags;
+use parking_lot::Mutex as PMutex;
 use tokio::{
   net::TcpStream,
   sync::Mutex,
   time::{Instant, sleep},
 };
-use parking_lot::Mutex as PMutex;
 
 #[derive(Clone, Debug)]
 pub struct Spool {
@@ -339,11 +339,11 @@ impl Ribbon {
     //   LogLevel::Warning | LogLevel::Error => eprintln!("{} {}", prefix, msg),
     // }
 
-		match level {
-			LogLevel::Info => tracing::info!("{}", msg),
-			LogLevel::Warning => tracing::warn!("{}", msg),
-			LogLevel::Error => tracing::error!("{}", msg),
-		}
+    match level {
+      LogLevel::Info => tracing::info!("{}", msg),
+      LogLevel::Warning => tracing::warn!("{}", msg),
+      LogLevel::Error => tracing::error!("{}", msg),
+    }
   }
 
   async fn encode(&self, msg: &str, data: serde_json::Value) -> TransportData {
@@ -624,36 +624,38 @@ impl Ribbon {
   }
 
   async fn process_queue(&self) {
-    let mut state = self.state.lock();
-    if state.recv_queue.is_empty() {
-      return;
-    }
-
-    if state.recv_queue.len() > CACHE_MAXSIZE {
-      // TODO: close "too many lost packets"
-    }
-
-    state.recv_queue.sort_by_key(|p| p.id.unwrap_or(0));
-
-    let mut packets = Vec::new();
-
-    while let Some(packet) = state.recv_queue.first() {
-      if let Some(id) = packet.id {
-        if id <= state.received_id {
-          state.recv_queue.remove(0);
-          continue;
-        } else if id != state.received_id + 1 {
-          break;
-        } else {
-          state.received_id = id;
-          packets.push(state.recv_queue.remove(0));
-        }
-      } else {
-        state.recv_queue.remove(0);
+    let packets = {
+      let mut state = self.state.lock();
+      if state.recv_queue.is_empty() {
+        return;
       }
-    }
 
-    drop(state);
+      if state.recv_queue.len() > CACHE_MAXSIZE {
+        // TODO: close "too many lost packets"
+      }
+
+      state.recv_queue.sort_by_key(|p| p.id.unwrap_or(0));
+
+      let mut packets = Vec::new();
+
+      while let Some(packet) = state.recv_queue.first() {
+        if let Some(id) = packet.id {
+          if id <= state.received_id {
+            state.recv_queue.remove(0);
+            continue;
+          } else if id != state.received_id + 1 {
+            break;
+          } else {
+            state.received_id = id;
+            packets.push(state.recv_queue.remove(0));
+          }
+        } else {
+          state.recv_queue.remove(0);
+        }
+      }
+
+      packets
+    };
 
     for packet in packets {
       self.run_message(packet).await;
@@ -691,21 +693,21 @@ impl Ribbon {
 
     match packet.command.as_str() {
       "session" => {
-        let mut state = self.state.lock();
-        let config = self.config.lock().clone();
-
         let ribbonid = packet.data["ribbonid"].as_str().unwrap_or("").to_string();
         let tokenid = packet.data["tokenid"].as_str().unwrap_or("").to_string();
 
-        state.flags &= !(Flags::CONNECTING | Flags::MIGRATING);
+        let (session, spool, sent_queue, config) = {
+          let mut state = self.state.lock();
+          let config = self.config.lock().clone();
 
-        state.session.ribbon_id = ribbonid;
+          state.flags &= !(Flags::CONNECTING | Flags::MIGRATING);
+          state.session.ribbon_id = ribbonid;
 
-        let session = state.session.clone();
-        let spool = state.spool.clone();
-        let sent_queue = state.sent_queue.clone();
-
-        drop(state);
+          let session = state.session.clone();
+          let spool = state.spool.clone();
+          let sent_queue = state.sent_queue.clone();
+          (session, spool, sent_queue, config)
+        };
 
         if !session.token_id.is_empty() {
           self
@@ -731,9 +733,7 @@ impl Ribbon {
             .await;
         }
 
-        let mut state = self.state.lock();
-
-        state.session.token_id = tokenid;
+        self.state.lock().session.token_id = tokenid;
       }
 
       "packets" => {
@@ -961,16 +961,16 @@ impl Ribbon {
   }
 
   pub async fn close(&self, reason: &str) {
-    let mut state = self.state.lock();
-    if !reason.is_empty() {
-      state.last_disconnect_reason = reason.to_string();
+    {
+      let mut state = self.state.lock();
+      if !reason.is_empty() {
+        state.last_disconnect_reason = reason.to_string();
+      }
+
+      self.emitter.emit(send::client::Close {
+        reason: state.last_disconnect_reason.clone(),
+      });
     }
-
-    self.emitter.emit(send::client::Close {
-      reason: state.last_disconnect_reason.clone(),
-    });
-
-    drop(state);
 
     let write_exists = self.write.lock().await.is_some();
 
@@ -982,9 +982,10 @@ impl Ribbon {
       write.close().await.ok();
     }
 
-    let mut state = self.state.lock();
-
-    state.flags |= Flags::DEAD;
+    {
+      let mut state = self.state.lock();
+      state.flags |= Flags::DEAD;
+    }
 
     self
       .reconnect_state
@@ -1010,7 +1011,6 @@ impl Ribbon {
               if ribbon
                 .state
                 .lock()
-                .await
                 .flags
                 .intersects(Flags::DEAD | Flags::CONNECTING | Flags::MIGRATING)
               {
@@ -1090,20 +1090,28 @@ impl Ribbon {
         return;
       }
 
-      let mut state = ribbon.state.lock();
-      state.pinger.heartbeat += 1;
-
-      let should_ping =
-        if state.flags.contains(Flags::FAST_PING) && !state.flags.contains(Flags::TIMING_OUT) {
-          true
-        } else {
-          state.pinger.heartbeat % 2 == 0
-        };
+      let (should_ping, is_alive) = {
+        let mut state = ribbon.state.lock();
+        state.pinger.heartbeat += 1;
+        let should_ping =
+          if state.flags.contains(Flags::FAST_PING) && !state.flags.contains(Flags::TIMING_OUT) {
+            true
+          } else {
+            state.pinger.heartbeat % 2 == 0
+          };
+        let is_alive = state.flags.contains(Flags::ALIVE);
+        if should_ping {
+          if !is_alive {
+            state.flags |= Flags::TIMING_OUT | Flags::ALIVE | Flags::CONNECTING;
+          } else {
+            state.flags &= !Flags::ALIVE;
+          }
+        }
+        (should_ping, is_alive)
+      };
 
       if should_ping {
-        if !state.flags.contains(Flags::ALIVE) {
-          state.flags |= Flags::TIMING_OUT | Flags::ALIVE | Flags::CONNECTING;
-          drop(state);
+        if !is_alive {
           ribbon
             .log(
               "Connection timed out, reconnecting...",
@@ -1113,11 +1121,9 @@ impl Ribbon {
             .await;
           ribbon.reconnect().await;
         } else {
-          state.flags &= !Flags::ALIVE;
           let write_open = ribbon.write.lock().await.is_some();
           if write_open {
-            state.pinger.last = Instant::now();
-            drop(state);
+            ribbon.state.lock().pinger.last = Instant::now();
             ribbon
               .pipe(
                 "ping",

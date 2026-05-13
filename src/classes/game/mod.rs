@@ -2,9 +2,8 @@ use std::sync::Arc;
 use std::{collections::HashMap, pin::Pin};
 
 use futures_util::future::join_all;
-use serde_json::Value;
-use tokio::sync::Mutex;
 use parking_lot::Mutex as PMutex;
+use serde_json::Value;
 
 use crate::types::game::tick;
 use crate::{
@@ -195,7 +194,8 @@ impl Game {
 			loop {
 				let start = std::time::Instant::now();
 
-				for player in game.state.lock().players.clone() {
+				let players = game.state.lock().players.clone();
+				for player in players {
 					player._tick().await;
 				}
 
@@ -783,10 +783,8 @@ impl Game {
     self
       .state
       .lock()
-      .await
       .spectating_loop_handle
       .lock()
-      .await
       .take()
       .map(|h| h.abort());
 

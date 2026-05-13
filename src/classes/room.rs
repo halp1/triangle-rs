@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
-use serde_json::Value;
 use parking_lot::Mutex;
+use serde_json::Value;
 use tokio::sync::Mutex as TMutex;
 
 use crate::{
@@ -155,10 +155,9 @@ impl Room {
       .on::<recv::room::update::Host>(async move |event| {
         state.lock().owner = event.0;
 
+        let players = state.lock().players.clone();
         ribbon
-          .emit(send::client::room::Players(
-            state.lock().players.clone(),
-          ))
+          .emit(send::client::room::Players(players))
           .await;
       })
       .await;
@@ -188,10 +187,9 @@ impl Room {
       .on::<recv::room::player::Add>(async move |event| {
         state.lock().players.push(event.0);
 
+        let players = state.lock().players.clone();
         ribbon
-          .emit(send::client::room::Players(
-            state.lock().players.clone(),
-          ))
+          .emit(send::client::room::Players(players))
           .await;
       })
       .await;
@@ -204,10 +202,9 @@ impl Room {
       .on::<recv::room::player::Remove>(async move |event| {
         state.lock().players.retain(|p| p.id != event.0);
 
+        let players = state.lock().players.clone();
         ribbon
-          .emit(send::client::room::Players(
-            state.lock().players.clone(),
-          ))
+          .emit(send::client::room::Players(players))
           .await;
       })
       .await;
@@ -229,7 +226,7 @@ impl Room {
         )
         .await;
 
-        game.lock().replace(g);
+        game.lock().await.replace(g);
 
         if data.is_new {
           state.lock().game_start = Some(std::time::Instant::now());
@@ -273,7 +270,7 @@ impl Room {
       .on::<recv::game::replay::End>(async move |data| {
         let mut me = {
           // TODO: die in replay generator
-          let game = game.lock();
+          let game = game.lock().await;
           let gameid = game.as_ref().and_then(|g| g.me.as_ref().map(|m| m.gameid));
           if game.is_none() || gameid.map_or(true, |p| p != data.gameid) {
             return;
@@ -297,7 +294,7 @@ impl Room {
       .on::<recv::game::Advance>(async move |_| {
         // TODO: end round in replay generator
 
-        if let Some(mut game) = game.lock().take() {
+        if let Some(mut game) = game.lock().await.take() {
           game.destroy().await;
           ribbon.emit(send::client::game::Over::End).await;
         }
@@ -310,7 +307,7 @@ impl Room {
     self
       .hook
       .on::<recv::game::Score>(async move |data| {
-        if let Some(mut g) = game.lock().take() {
+        if let Some(mut g) = game.lock().await.take() {
           g.destroy().await;
         }
 
@@ -335,7 +332,7 @@ impl Room {
 
         ribbon.emit(send::client::game::Abort).await;
 
-        if let Some(mut g) = game.lock().take() {
+        if let Some(mut g) = game.lock().await.take() {
           g.destroy().await;
           ribbon.emit(send::client::game::Over::Abort).await;
         }
@@ -422,7 +419,7 @@ impl Room {
 
         ribbon.emit(end_event).await;
 
-        if let Some(mut g) = game.lock().take() {
+        if let Some(mut g) = game.lock().await.take() {
           g.destroy().await;
           ribbon.emit(send::client::game::Over::End).await;
         }
@@ -446,7 +443,7 @@ impl Room {
       .hook
       .on::<recv::room::Leave>(async move |_| {
         hook.destroy().await;
-        if let Some(mut game) = game.lock().take() {
+        if let Some(mut game) = game.lock().await.take() {
           game.destroy().await;
           drop(game);
           ribbon.emit(send::client::game::Over::Leave).await;
@@ -462,7 +459,7 @@ impl Room {
       .hook
       .on::<recv::room::Kick>(async move |_| {
         hook.destroy().await;
-        if let Some(mut game) = game.lock().take() {
+        if let Some(mut game) = game.lock().await.take() {
           game.destroy().await;
           drop(game);
           ribbon.emit(send::client::game::Over::Leave).await;
@@ -645,7 +642,7 @@ impl Room {
 
   pub async fn _set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
     self.state.lock().spectating_strategy = strategy.clone();
-    if let Some(game) = self.game.lock().as_ref().clone() {
+    if let Some(game) = self.game.lock().await.as_ref().clone() {
       game._set_spectating_strategy(strategy).await;
     }
   }

@@ -1,3 +1,4 @@
+use parking_lot::Mutex as PMutex;
 use serde_json::{Value, json};
 /// originally `Self` in Triangle.js. changed to `Me` to avoid confusion with `Self` in Rust.
 use std::{
@@ -5,7 +6,6 @@ use std::{
   time::{Duration, Instant},
 };
 use tokio::sync::{Mutex, oneshot};
-use parking_lot::Mutex as PMutex;
 
 use crate::engine::queue::{Queue, QueueInitParams, bag::BagType};
 use crate::{
@@ -179,7 +179,6 @@ impl Me {
       .on::<recv::game::replay::IGE>(async move |ige| {
         me.state
           .lock()
-          .await
           .ige_queue
           .extend(ige.iges.iter().cloned());
         me.flush_iges().await;

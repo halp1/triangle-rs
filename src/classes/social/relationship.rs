@@ -116,20 +116,20 @@ impl Relationship {
     Ok(dms)
   }
 
-	pub async fn dms(&self) -> Vec<dm::DM> {
+  pub async fn dms(&self) -> Vec<dm::DM> {
     let dms_lock = self.dms.lock();
     dms_lock.1.clone()
   }
 
-	pub async fn dms_loaded(&self) -> bool {
-		let dms_lock = self.dms.lock();
-		dms_lock.0
-	}
+  pub async fn dms_loaded(&self) -> bool {
+    let dms_lock = self.dms.lock();
+    dms_lock.0
+  }
 
-	pub async fn _add_dm(&self, dm: dm::DM) {
-		let mut dms_lock = self.dms.lock();
-		dms_lock.1.push(dm);
-	}
+  pub async fn _add_dm(&self, dm: dm::DM) {
+    let mut dms_lock = self.dms.lock();
+    dms_lock.1.push(dm);
+  }
 
   pub async fn invite(&self) -> Result<(), String> {
     invite(&self.ribbon, &self.user_id).await

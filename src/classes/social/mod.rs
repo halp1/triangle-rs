@@ -119,8 +119,10 @@ impl Social {
     self
       .ribbon
       .on::<recv::social::Notification>(async move |n| {
-        let mut notifications = notifications.lock();
-        notifications.insert(0, n.clone());
+        {
+          let mut notifications = notifications.lock();
+          notifications.insert(0, n.clone());
+        }
 
         if auto_process_notifications {
           if n.notification_type == "friend" {
@@ -259,7 +261,7 @@ impl Social {
           }
         }
       }
-			self.mark_notifications_as_read().await;
+      self.mark_notifications_as_read().await;
     }
   }
 
@@ -274,7 +276,6 @@ impl Social {
     self
       .notifications
       .lock()
-      .await
       .iter_mut()
       .for_each(|n| n.seen = true);
   }
@@ -294,13 +295,7 @@ impl Social {
   }
 
   pub async fn friend(&mut self, user_id: &str) -> Result<bool, ApiError> {
-    if self
-      .friends
-      .lock()
-      .await
-      .iter()
-      .any(|f| f.user_id == user_id)
-    {
+    if self.friends.lock().iter().any(|f| f.user_id == user_id) {
       return Ok(false);
     }
     self.ribbon.api.social.friend(user_id).await?;
@@ -334,13 +329,7 @@ impl Social {
   }
 
   pub async fn unfriend(&mut self, user_id: &str) -> Result<bool, ApiError> {
-    if self
-      .friends
-      .lock()
-      .await
-      .iter()
-      .all(|f| f.user_id != user_id)
-    {
+    if self.friends.lock().iter().all(|f| f.user_id != user_id) {
       return Ok(false);
     }
 
