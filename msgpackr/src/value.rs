@@ -293,6 +293,13 @@ impl Value {
       None
     }
   }
+  pub fn as_bool(&self) -> Option<bool> {
+    if let Value::Bool(b) = self {
+      Some(*b)
+    } else {
+      None
+    }
+  }
 
   /// Convert integer Value to the most compact integer type for display
   pub fn normalize_int(self) -> Self {

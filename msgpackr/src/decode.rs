@@ -710,6 +710,20 @@ impl<'a> Decoder<'a> {
             let id_byte = self.read_u8()?;
             return self.read_record_definition(id_byte & 0x3f, None, opts);
           }
+          // Check for value-based handler (JS `extension.read` semantics):
+          // skip the filler byte and read the next stream value.
+          if let Some(ref reg) = self.ext_registry.clone() {
+            if reg.has_unpack_value(ext_type as i8) {
+              self.pos += 1; // skip filler byte
+              let inner = self.read(opts)?;
+              return reg.try_unpack_value(ext_type as i8, inner).unwrap_or(Err(
+                crate::error::Error::invalid(format!(
+                  "Extension handler for type {} failed",
+                  ext_type
+                )),
+              ));
+            }
+          }
           let end = self.pos + 1;
           self.dispatch_ext_data(ext_type, 1, end, opts)
         }

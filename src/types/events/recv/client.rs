@@ -1,4 +1,4 @@
-use crate::{classes::social::relationship::Relationship, macros::event, types::social};
+use crate::{macros::event, types::social};
 
 event!(client.ready => Ready {
   endpoint: String,

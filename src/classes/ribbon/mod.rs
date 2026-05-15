@@ -1,5 +1,8 @@
+pub mod bits;
 pub mod hook;
+
 pub use hook::Hook;
+use serde::{Deserialize, Serialize};
 
 use std::{sync::Arc, time::Duration};
 
@@ -10,15 +13,16 @@ use futures_util::{
 use http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL};
 use tokio_tungstenite::{
   MaybeTlsStream, WebSocketStream, connect_async,
-  tungstenite::{Error, Message, client::IntoClientRequest, http},
+  tungstenite::{Error, Message, Utf8Bytes, client::IntoClientRequest, http},
 };
 
 use crate::{
+  classes::ribbon::bits::Bits,
   types::{
     events::{recv, send},
     game::Handling,
     server,
-    user::Me,
+    user::{Me, Role},
   },
   utils::{
     EventEmitter,
@@ -93,7 +97,7 @@ bitflags! {
   }
 }
 
-const F_ID_FLAG: u32 = 128;
+const F_ID_FLAG: u8 = 128;
 
 const SLOW_CODEC_THRESHOLD: Duration = Duration::from_millis(100);
 
@@ -120,7 +124,7 @@ pub struct Session {
 
 #[derive(Debug, Clone)]
 pub struct OutPacket {
-  pub id: Option<u32>,
+  pub id: u32,
   pub packet: Vec<u8>,
 }
 
@@ -148,6 +152,12 @@ impl Default for Options {
   }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct PacketWithoutId {
+  pub command: String,
+  pub data: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Transport {
   #[default]
@@ -156,7 +166,7 @@ pub enum Transport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransportData {
-  UTF8(String),
+  UTF8(Vec<u8>),
   Binary(Vec<u8>),
 }
 
@@ -164,11 +174,11 @@ impl Transport {
   pub fn encode(&self, command: &str, data: serde_json::Value) -> TransportData {
     match self {
       Transport::JSON => TransportData::UTF8(
-        serde_json::json!({
-          "command": command,
-          "data": data,
+        serde_json::to_vec(&PacketWithoutId {
+          command: command.to_string(),
+          data,
         })
-        .to_string(),
+        .unwrap_or_else(|_| b"{}".to_vec()),
       ),
     }
   }
@@ -184,7 +194,6 @@ impl Transport {
 struct RibbonConfig {
   token: String,
   handling: Handling,
-  user_agent: String,
   transport: Transport,
   options: Options,
 }
@@ -246,7 +255,7 @@ impl Ribbon {
       token: params.token.clone(),
       user_agent: params.user_agent.clone(),
       transport: match params.transport {
-        Transport::JSON => api::Transport::JSON,
+        Transport::JSON => api::Transport::Binary,
       },
     });
 
@@ -259,7 +268,6 @@ impl Ribbon {
       config: Arc::new(PMutex::new(RibbonConfig {
         token: params.token,
         handling: params.handling,
-        user_agent: params.user_agent,
         transport: params.transport,
         options: params.options,
       })),
@@ -347,9 +355,9 @@ impl Ribbon {
   }
 
   async fn encode(&self, msg: &str, data: serde_json::Value) -> TransportData {
-    let start = Instant::now();
-
     let transport = self.config.lock().transport.clone();
+
+    let start = Instant::now();
 
     let res = transport.encode(msg, data);
 
@@ -366,6 +374,12 @@ impl Ribbon {
           true,
         )
         .await;
+    } else {
+      println!(
+        "Encode time for {}: {}µs",
+        msg,
+        end.duration_since(start).as_micros()
+      );
     }
     res
   }
@@ -530,14 +544,66 @@ impl Ribbon {
   }
 
   async fn pipe(&self, command: &str, data: serde_json::Value) {
-    self.emitter.emit_raw(
-      "client.ribbon.send",
-      serde_json::json!({
-        "command": command,
-        "data": data,
-      }),
-    );
-    if command != "ping" {
+    let packet = self.encode(command, data.clone()).await;
+
+    match packet {
+      TransportData::UTF8(s) => {
+        if let Some(write) = &mut *self.write.lock().await {
+          let msg = Message::Text(Utf8Bytes::try_from(s).expect("Failed to convert to UTF-8"));
+          let _ = write.send(msg).await;
+        }
+      }
+
+      TransportData::Binary(b) => {
+        if (b[0] & F_ID_FLAG) == 0 {
+          if let Some(write) = &mut *self.write.lock().await {
+            let msg = Message::Binary(b.into());
+            write.send(msg).await.ok();
+          }
+        } else {
+          let id = {
+            let mut state = self.state.lock();
+            let id = state.sent_id;
+            state.sent_id += 1;
+            id
+          };
+
+          let mut bits = Bits::from_bytes(b);
+          bits
+            .seek(8, 1)
+            .expect("Fatal error: Failed to write packet ID");
+          bits
+            .write(id.into(), 24)
+            .expect("Fatal error: Failed to write packet ID");
+          let packet = bits.into_bytes();
+
+          let should_send = {
+            let mut state = self.state.lock();
+            state.sent_queue.push(OutPacket {
+              id,
+              packet: packet.clone(),
+            });
+
+            if !state.flags.contains(Flags::CONNECTING) {
+              let current_queue_size = state.sent_queue.len();
+              state
+                .sent_queue
+                .drain(..current_queue_size.saturating_sub(CACHE_MAXSIZE));
+              true
+            } else {
+              false
+            }
+          };
+
+          if should_send && let Some(write) = &mut *self.write.lock().await {
+            let msg = Message::Binary(packet.into());
+            write.send(msg).await.ok();
+          }
+        }
+      }
+    }
+
+    if command != "ping" && self.config.lock().options.logging == LoggingLevel::All {
       self
         .log(
           &format!(
@@ -551,20 +617,10 @@ impl Ribbon {
         .await;
     }
 
-    let packet = self.encode(command, data).await;
-
-    match packet {
-      TransportData::UTF8(s) => {
-        if let Some(write) = &mut *self.write.lock().await {
-          let msg = Message::Text(s.into());
-          let _ = write.send(msg).await;
-        }
-      }
-
-      TransportData::Binary(_b) => {
-        unimplemented!()
-      }
-    }
+    self.emitter.emit(send::client::ribbon::Send {
+      command: command.into(),
+      data: data,
+    });
   }
 
   pub async fn emit<T: Event>(&self, event: T) {
@@ -754,9 +810,7 @@ impl Ribbon {
         state.pinger.time = Instant::now() - state.pinger.last;
 
         if let Some(id) = id {
-          while state.sent_queue.len() > 0
-            && state.sent_queue[0].id.map(|i| i <= id).unwrap_or(false)
-          {
+          while state.sent_queue.len() > 0 && state.sent_queue[0].id <= id {
             state.sent_queue.remove(0);
           }
         }
@@ -819,7 +873,24 @@ impl Ribbon {
                 })
                 .await;
 
-              // TODO: self report
+              let role = self.state.lock().me.role.clone();
+              match role {
+                Role::Bot | Role::Banned => {}
+                _ => {
+                  self
+                    .api
+                    .post::<serde_json::Value>(
+                      "reports/submit",
+                      serde_json::json!({
+                        "target": self.state.lock().me.username.clone(),
+                        "type": "cheating",
+                        "reason": "non-bot account used with triangle-rs, auto report"
+                      }),
+                    )
+                    .await
+                    .ok();
+                }
+              };
             } else {
               // TODO: close
               // this.emitter.emit("client.error", "Failure to authorize ribbon");

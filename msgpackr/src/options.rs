@@ -7,6 +7,11 @@ use std::sync::Arc;
 /// Takes the raw extension data bytes and returns a decoded `Value`.
 pub type UnpackExtFn = Arc<dyn Fn(&[u8]) -> Result<Value> + Send + Sync>;
 
+/// A function called when a custom extension type code is encountered during decode,
+/// receiving the already-decoded inner `Value` (equivalent to msgpackr JS `extension.read`).
+/// For fixext1, the inner value is the next value in the stream (filler byte is skipped).
+pub type UnpackValueExtFn = Arc<dyn Fn(Value) -> Result<Value> + Send + Sync>;
+
 /// A function called when a `Value::Ext` with a matching type code is being encoded.
 /// Returns `Some(bytes)` to replace the raw payload, or `None` to use the payload as-is.
 pub type PackExtFn = Arc<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + Sync>;
@@ -18,6 +23,7 @@ pub type PackExtFn = Arc<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + Sync>;
 #[derive(Clone, Default)]
 pub struct ExtRegistry {
   unpackers: HashMap<i8, UnpackExtFn>,
+  value_unpackers: HashMap<i8, UnpackValueExtFn>,
   packers: HashMap<i8, PackExtFn>,
 }
 
@@ -36,6 +42,17 @@ impl ExtRegistry {
     self.unpackers.insert(type_code, Arc::new(f));
   }
 
+  /// Register a value-based decode handler (equivalent to msgpackr JS `extension.read`).
+  /// For fixext1, the decoder skips the filler byte and reads the next stream value,
+  /// passing the decoded `Value` directly to this handler.
+  pub fn add_unpack_value(
+    &mut self,
+    type_code: i8,
+    f: impl Fn(Value) -> Result<Value> + Send + Sync + 'static,
+  ) {
+    self.value_unpackers.insert(type_code, Arc::new(f));
+  }
+
   /// Register an encode transform for a custom extension type code.
   /// Called when encoding `Value::Ext(type_code, data)` — can rewrite the payload.
   /// Most users don't need this; it exists for advanced compatibility with JS `addExtension`.
@@ -50,6 +67,16 @@ impl ExtRegistry {
   /// Try to decode custom extension data. Returns `None` if no handler is registered.
   pub fn try_unpack(&self, type_code: i8, data: &[u8]) -> Option<Result<Value>> {
     self.unpackers.get(&type_code).map(|f| f(data))
+  }
+
+  /// Try to decode with a value-based handler. Returns `None` if no handler is registered.
+  pub fn try_unpack_value(&self, type_code: i8, inner: Value) -> Option<Result<Value>> {
+    self.value_unpackers.get(&type_code).map(|f| f(inner))
+  }
+
+  /// Returns true if a value-based handler is registered for this type code.
+  pub fn has_unpack_value(&self, type_code: i8) -> bool {
+    self.value_unpackers.contains_key(&type_code)
   }
 
   /// Try to transform ext payload on encode. Returns `None` if no handler is registered.

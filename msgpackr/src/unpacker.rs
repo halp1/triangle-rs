@@ -50,6 +50,22 @@ impl Unpacker {
     reg.add_unpack(type_code, unpack);
   }
 
+  /// Register a value-based extension handler (equivalent to msgpackr JS `extension.read`).
+  /// For fixext1, the decoder skips the filler byte and reads the next stream value,
+  /// passing the decoded `Value` directly to the handler — matching JS behaviour exactly.
+  pub fn add_extension_read(
+    &mut self,
+    type_code: i8,
+    unpack: impl Fn(Value) -> crate::error::Result<Value> + Send + Sync + 'static,
+  ) {
+    let reg = Arc::make_mut(
+      self
+        .ext_registry
+        .get_or_insert_with(|| Arc::new(ExtRegistry::new())),
+    );
+    reg.add_unpack_value(type_code, unpack);
+  }
+
   /// Decode a single value.
   pub fn unpack(&self, data: &[u8]) -> Result<Value> {
     let mut dec = Decoder::new(data).with_structures(self.structures.clone());
