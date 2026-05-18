@@ -7,9 +7,6 @@ edition = "2024"
 name = "triangle"
 path = "src/lib.rs"
 
-[[bin]]
-name = "triangle-rs"
-path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

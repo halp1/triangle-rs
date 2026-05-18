@@ -47,7 +47,7 @@ pub enum GarbageEntry {
   Delayed,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GarbageBlocking {
   #[serde(rename = "combo blocking")]
   ComboBlocking,
@@ -57,7 +57,7 @@ pub enum GarbageBlocking {
   None,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum GarbageTargetBonus {
   #[serde(rename = "offensive")]
   Offensive,
@@ -67,7 +67,7 @@ pub enum GarbageTargetBonus {
   None,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Passthrough {
   #[serde(rename = "zero")]
   Zero,
@@ -79,7 +79,7 @@ pub enum Passthrough {
   Full,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SpinBonuses {
   #[serde(rename = "T-spins")]
   TSpins,
@@ -113,6 +113,16 @@ pub enum Spin {
   Normal,
 }
 
+impl Spin {
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			Spin::None => "none",
+			Spin::Mini => "mini",
+			Spin::Normal => "normal",
+		}
+	}
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Preset {
   #[serde(rename = "default")]
@@ -137,14 +147,14 @@ pub enum Preset {
   Quickplay,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RoundingMode {
   Down,
   Rng,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum ComboTable {
   #[serde(rename = "none")]
   None,
@@ -157,17 +167,17 @@ pub enum ComboTable {
 }
 
 impl ComboTable {
-  pub fn data(&self) -> &'static [f64] {
+  pub fn data(&self) -> &[u8] {
     match self {
-      ComboTable::None => &[0.0],
+      ComboTable::None => &[0],
       ComboTable::Multiplier => panic!("Multiplier combo table does not have predefined data"),
-      ComboTable::ClassicGuideline => &[0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
-      ComboTable::ModernGuideline => &[0.0, 0.5, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0],
+      ComboTable::ClassicGuideline => &[0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5],
+      ComboTable::ModernGuideline => &[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4],
     }
   }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GameMode {
   Versus,
@@ -175,7 +185,7 @@ pub enum GameMode {
   Practice,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GameOverReason {
   Topout,

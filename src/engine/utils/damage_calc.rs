@@ -132,7 +132,7 @@ pub fn garbage_calc_v2(input: &GarbageCalcInput, config: &GarbageCalcConfig) -> 
       ref table => {
         let table_data = table.data();
         let idx = ((combo - 1) as usize).min(table_data.len().saturating_sub(1));
-        garbage += table_data[idx];
+        garbage += table_data[idx] as f64;
       }
     }
   }
