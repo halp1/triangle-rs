@@ -210,7 +210,6 @@ struct RibbonState {
   last_disconnect_reason: String,
   sent_queue: Vec<OutPacket>,
   recv_queue: Vec<InPacket>,
-  close_handle: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 #[derive(Debug)]
@@ -295,7 +294,6 @@ impl Ribbon {
         last_disconnect_reason: String::new(),
         sent_queue: Vec::new(),
         recv_queue: Vec::new(),
-        close_handle: None,
       })),
       reconnect_state: Arc::new(Mutex::new(RibbonReconnectState {
         reconnect_handle: None,
@@ -1041,7 +1039,7 @@ impl Ribbon {
     reconnect_state.reconnect_count += 1;
   }
 
-  pub async fn __internal_close(&self, reason: &str, disconnect: bool) {
+  pub async fn __internal_close(&self, reason: &str) {
     {
       let mut state = self.state.lock();
       if !reason.is_empty() {
@@ -1059,7 +1057,7 @@ impl Ribbon {
       self.emit(send::Die {}).await.ok();
     }
 
-    if disconnect && let Some(mut write) = self.write.lock().await.take() {
+    if let Some(mut write) = self.write.lock().await.take() {
       write.close().await.ok();
     }
 
@@ -1078,26 +1076,7 @@ impl Ribbon {
   }
 
   pub async fn close(&self, reason: &str) {
-    self.__internal_close(reason, true).await;
-  }
-
-  pub async fn close_gracefully(&self) {
-    println!("Closing ribbon gracefully...");
-    if self.write.lock().await.is_none() {
-      return;
-    }
-    let rx = {
-      let (tx, rx) = tokio::sync::oneshot::channel();
-      self.state.lock().close_handle.replace(tx);
-      rx
-    };
-
-    self.__internal_close("", false).await;
-
-    println!("waiting for close confirmation...");
-    rx.await.ok();
-
-    println!("Ribbon closed gracefully.");
+    self.__internal_close(reason).await;
   }
 
   async fn listen(
@@ -1135,10 +1114,6 @@ impl Ribbon {
                   )
                   .await;
 
-                if let Some(tx) = ribbon.state.lock().close_handle.take() {
-                  tx.send(()).ok();
-                }
-
                 let code = frame.as_ref().map(|f| f.code.into()).unwrap_or(1000);
                 let reason = close_code_reason(code);
                 ribbon.state.lock().last_disconnect_reason = reason.into();
@@ -1168,22 +1143,17 @@ impl Ribbon {
               // ribbon.state.lock().flags |= Flags::CONNECTING;
               // ribbon.reconnect().await;
 
-              if let Some(tx) = ribbon.state.lock().close_handle.take() {
-                tx.send(()).ok();
-              }
               return;
             }
             _ => {
               ribbon.log(&format!("{}", e), LogLevel::Error, true).await;
-              if let Some(tx) = ribbon.state.lock().close_handle.take() {
-                tx.send(()).ok();
-              }
             }
           }
           // handle error
         }
       }
     }
+		println!("connection closed");
   }
 
   async fn pinger(ribbon: Ribbon) {
@@ -1297,6 +1267,6 @@ impl Ribbon {
 
   pub async fn destroy(&self) {
     self.emitter.destroy();
-    self.close_gracefully().await;
+    self.close("").await;
   }
 }
