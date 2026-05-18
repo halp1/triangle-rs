@@ -143,7 +143,8 @@ impl Player {
         self
           .ribbon
           .emit(send::game::scope::Start(self.gameid))
-          .await;
+          .await
+          .ok();
       }
     }
 
@@ -168,7 +169,7 @@ impl Player {
       state.state = SpectatingState::Inactive;
       state.queue.clear();
     }
-    self.ribbon.emit(send::game::scope::End(self.gameid)).await;
+    self.ribbon.emit(send::game::scope::End(self.gameid)).await.ok();
   }
 
   pub async fn destroy(&mut self) {

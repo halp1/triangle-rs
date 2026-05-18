@@ -349,7 +349,7 @@ fn convert_round(
     },
     pc: Some(PcOptions {
       b2b: get_i32(options, "allclear_b2b", 0) as u64,
-      garbage: get_f64(options, "allclear_garbage", 0.0),
+      garbage: get_i32(options, "allclear_garbage", 0) as u32,
     }),
     misc: MiscOptions {
       allowed: AllowedOptions {
@@ -546,10 +546,6 @@ fn get_optional_string(obj: &MValue, key: &str) -> Option<String> {
   mvalue_get(obj, key)
     .and_then(as_str_like)
     .map(ToString::to_string)
-}
-
-fn get_string(obj: &MValue, key: &str, default: &str) -> String {
-  get_optional_string(obj, key).unwrap_or_else(|| default.to_string())
 }
 
 fn parse_kick_table(s: &str) -> KickTable {

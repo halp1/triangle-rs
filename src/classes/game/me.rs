@@ -7,7 +7,10 @@ use std::{
 };
 use tokio::sync::{Mutex, oneshot};
 
-use crate::engine::queue::{Queue, QueueInitParams, bag::BagType};
+use crate::engine::{
+  self,
+  queue::{Queue, QueueInitParams, bag::BagType},
+};
 use crate::{
   Engine,
   classes::{
@@ -41,6 +44,7 @@ pub struct MeState {
   #[allow(dead_code)]
   is_practice: bool,
   over: bool,
+  tanked_garbage: Vec<engine::garbage::OutgoingGarbage>,
   pub engine: Engine,
   pub server_targets: Vec<u64>,
   pub enemies: Vec<u64>,
@@ -98,6 +102,7 @@ impl Me {
         slow_tick_warning: false,
         is_practice: false,
         over: false,
+        tanked_garbage: Vec::new(),
 
         engine: Game::create_engine(
           &self_player.options,
@@ -177,10 +182,7 @@ impl Me {
     self
       .hook
       .on::<recv::game::replay::IGE>(async move |ige| {
-        me.state
-          .lock()
-          .ige_queue
-          .extend(ige.iges.iter().cloned());
+        me.state.lock().ige_queue.extend(ige.iges.iter().cloned());
         me.flush_iges().await;
       })
       .await;
@@ -209,29 +211,36 @@ impl Me {
 
       me.set_target(target).await.ok();
 
-      me.ribbon.emit(recv::client::game::round::Start {}).await;
+      me.ribbon
+        .emit(recv::client::game::round::Start {})
+        .await
+        .ok();
 
       loop {
-        let (continue_game, delay) = me.tick_game().await;
+        let (continue_game, tick_instantly, next_target) = me.tick_game().await;
         if !continue_game {
           break;
         }
-        if delay.as_secs_f64() > 0.0 {
-          tokio::time::sleep(delay).await;
+        if !tick_instantly {
+          tokio::time::sleep_until(next_target.into()).await;
         }
       }
     }));
   }
 
   async fn flush_frames(&self) -> Vec<replay::Frame> {
-    let state = self.state.lock();
+    let mut state = self.state.lock();
+
+    let frame = state.engine.frame;
 
     let mut return_frames: Vec<replay::Frame> = state
       .frame_queue
       .iter()
-      .filter(|f| f.frame <= state.engine.frame)
+      .filter(|f| f.frame <= frame)
       .cloned()
       .collect();
+
+    state.frame_queue.retain(|f| f.frame > frame);
 
     if !state.can_target {
       return_frames.retain(|f| match &f.data {
@@ -270,22 +279,27 @@ impl Me {
   }
 
   /// Returns (continue, delay until next tick. 0 = run instantly)
-  async fn tick_game(&self) -> (bool, Duration) {
-    let (snapshot, engine) = {
-      let state = self.state.lock();
+  async fn tick_game(&self) -> (bool, bool, Instant) {
+    let (snapshot, engine, new_garbage) = {
+      let mut state = self.state.lock();
 
       if state.over {
-        return (false, Duration::from_secs(0));
+        return (false, false, Instant::now());
       }
 
       let snapshot = state.engine.snapshot();
 
-      (snapshot, state.engine.clone())
+      (
+        snapshot,
+        state.engine.clone(),
+        state.tanked_garbage.drain(..).collect::<Vec<_>>(),
+      )
     };
 
     let res = (self.tick.0.lock().await)(tick::In {
       engine,
       gameid: self.gameid,
+      new_garbage: new_garbage.into_iter().map(|g| g.into()).collect(),
     })
     .await;
 
@@ -298,7 +312,7 @@ impl Me {
       // TODO: verify keys
 
       if state.over {
-        return (false, Duration::from_secs(0));
+        return (false, false, Instant::now());
       }
     }
 
@@ -347,7 +361,10 @@ impl Me {
         .collect();
       all_frames.extend(key_frames.iter().cloned());
 
-      state.engine.tick(&all_frames);
+      let res = state.engine.tick(&all_frames);
+      state
+        .tanked_garbage
+        .extend(res.garbage_received.iter().cloned());
 
       state.frame_queue.extend(key_frames);
 
@@ -363,15 +380,15 @@ impl Me {
           provisioned: frame,
           frames,
         })
-        .await;
+        .await
+        .ok();
     }
 
     for f in res.run_after {
       f.call().await;
     }
-
-    let target = Duration::from_secs_f64((frame + 1) as f64 / FRAMES_PER_SECOND as f64)
-      .saturating_sub(start_time.unwrap().elapsed());
+    let target =
+      start_time.unwrap() + Duration::from_secs_f64((frame + 1) as f64 / FRAMES_PER_SECOND as f64);
     let lag_back = start_time
       .unwrap()
       .elapsed()
@@ -388,11 +405,11 @@ impl Me {
       state.slow_tick_warning = true;
     }
 
-    if target.as_secs_f64() <= 0.0 && frame.is_multiple_of(FRAMES_PER_SECOND / 2) {
-      return (true, Duration::from_secs(0));
+    if Instant::now() <= target && !frame.is_multiple_of(FRAMES_PER_SECOND / 2) {
+      return (true, true, Instant::now());
     }
 
-    (true, target.max(Duration::from_micros(50))) // minimum delay of 50µs to prevent runaway loop in case of severe lag
+    (true, false, target)
   }
 
   async fn flush_iges(&self) {

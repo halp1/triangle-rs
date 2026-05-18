@@ -76,7 +76,7 @@ pub async fn send_dm(
 }
 
 pub async fn invite(ribbon: &Ribbon, recipient_id: &str) -> Result<(), String> {
-  ribbon.emit(send::social::Invite(recipient_id.into())).await;
+  ribbon.emit(send::social::Invite(recipient_id.into())).await.ok();
 
   select! {
     biased;
@@ -105,7 +105,7 @@ impl Relationship {
   }
 
   pub async fn mark_as_read(&self) {
-    self.ribbon.emit(send::social::relation::Ack {}).await;
+    self.ribbon.emit(send::social::relation::Ack {}).await.ok();
   }
 
   pub async fn load_dms(&self) -> Result<Vec<dm::DM>, ApiError> {

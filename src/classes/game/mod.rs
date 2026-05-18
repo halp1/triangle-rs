@@ -307,7 +307,7 @@ impl Game {
       },
       pc: if jv_bool(options, "allclears", false) {
         Some(PcOptions {
-          garbage: jv_f64(options, "allclear_garbage", 0.0),
+          garbage: jv_u64(options, "allclear_garbage", 0) as u32,
           b2b: jv_u64(options, "allclear_b2b", 0),
         })
       } else {

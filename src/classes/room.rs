@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::sync::Mutex as TMutex;
 
 use crate::{
   classes::{ClientUser, Ribbon, game::Game, ribbon},
@@ -56,7 +55,7 @@ pub struct RoomState {
 pub struct Room {
   ribbon: Ribbon,
   hook: ribbon::Hook,
-  game: Arc<TMutex<Option<Game>>>,
+  game: Arc<Mutex<Option<Game>>>,
   me: ClientUser,
 
   pub state: Arc<Mutex<RoomState>>,
@@ -65,7 +64,7 @@ pub struct Room {
 impl Room {
   pub async fn new(
     ribbon: Ribbon,
-    game: Arc<TMutex<Option<Game>>>,
+    game: Arc<Mutex<Option<Game>>>,
     me: ClientUser,
     update: recv::room::Update,
     spectating_strategy: SpectatingStrategy,
@@ -156,9 +155,7 @@ impl Room {
         state.lock().owner = event.0;
 
         let players = state.lock().players.clone();
-        ribbon
-          .emit(send::client::room::Players(players))
-          .await;
+        ribbon.emit(send::client::room::Players(players)).await.ok();
       })
       .await;
 
@@ -188,9 +185,7 @@ impl Room {
         state.lock().players.push(event.0);
 
         let players = state.lock().players.clone();
-        ribbon
-          .emit(send::client::room::Players(players))
-          .await;
+        ribbon.emit(send::client::room::Players(players)).await.ok();
       })
       .await;
 
@@ -203,9 +198,7 @@ impl Room {
         state.lock().players.retain(|p| p.id != event.0);
 
         let players = state.lock().players.clone();
-        ribbon
-          .emit(send::client::room::Players(players))
-          .await;
+        ribbon.emit(send::client::room::Players(players)).await.ok();
       })
       .await;
 
@@ -226,7 +219,7 @@ impl Room {
         )
         .await;
 
-        game.lock().await.replace(g);
+        game.lock().replace(g);
 
         if data.is_new {
           state.lock().game_start = Some(std::time::Instant::now());
@@ -255,7 +248,8 @@ impl Room {
                 })
                 .collect(),
             })
-            .await;
+            .await
+            .ok();
         }
       })
       .await;
@@ -270,7 +264,7 @@ impl Room {
       .on::<recv::game::replay::End>(async move |data| {
         let mut me = {
           // TODO: die in replay generator
-          let game = game.lock().await;
+          let game = game.lock();
           let gameid = game.as_ref().and_then(|g| g.me.as_ref().map(|m| m.gameid));
           if game.is_none() || gameid.map_or(true, |p| p != data.gameid) {
             return;
@@ -282,7 +276,8 @@ impl Room {
 
         ribbon
           .emit(send::client::game::Over::Finish(data.data))
-          .await;
+          .await
+          .ok();
       })
       .await;
 
@@ -294,9 +289,10 @@ impl Room {
       .on::<recv::game::Advance>(async move |_| {
         // TODO: end round in replay generator
 
-        if let Some(mut game) = game.lock().await.take() {
+        let game = { game.lock().take() };
+        if let Some(mut game) = game {
           game.destroy().await;
-          ribbon.emit(send::client::game::Over::End).await;
+          ribbon.emit(send::client::game::Over::End).await.ok();
         }
       })
       .await;
@@ -307,15 +303,16 @@ impl Room {
     self
       .hook
       .on::<recv::game::Score>(async move |data| {
-        if let Some(mut g) = game.lock().await.take() {
-          g.destroy().await;
+        let game = { game.lock().take() };
+        if let Some(mut game) = game {
+          game.destroy().await;
+          ribbon
+            .emit(send::client::game::round::End(
+              data.scoreboard.first().map(|s| s.id.clone()),
+            ))
+            .await
+            .ok();
         }
-
-        ribbon
-          .emit(send::client::game::round::End(
-            data.scoreboard.first().map(|s| s.id.clone()),
-          ))
-          .await;
       })
       .await;
 
@@ -330,11 +327,12 @@ impl Room {
           return;
         }
 
-        ribbon.emit(send::client::game::Abort).await;
+        ribbon.emit(send::client::game::Abort).await.ok();
 
-        if let Some(mut g) = game.lock().await.take() {
+        let game = { game.lock().take() };
+        if let Some(mut g) = game {
           g.destroy().await;
-          ribbon.emit(send::client::game::Over::Abort).await;
+          ribbon.emit(send::client::game::Over::Abort).await.ok();
         }
 
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -374,7 +372,8 @@ impl Room {
 
         ribbon
           .emit(send::client::game::round::End(round_winner))
-          .await;
+          .await
+          .ok();
 
         let duration_ms = game_start
           .map(|s| s.elapsed().as_secs_f64() * 1000.0)
@@ -417,11 +416,12 @@ impl Room {
           }
         };
 
-        ribbon.emit(end_event).await;
+        ribbon.emit(end_event).await.ok();
 
-        if let Some(mut g) = game.lock().await.take() {
+        let game = { game.lock().take() };
+        if let Some(mut g) = game {
           g.destroy().await;
-          ribbon.emit(send::client::game::Over::End).await;
+          ribbon.emit(send::client::game::Over::End).await.ok();
         }
       })
       .await;
@@ -443,10 +443,11 @@ impl Room {
       .hook
       .on::<recv::room::Leave>(async move |_| {
         hook.destroy().await;
-        if let Some(mut game) = game.lock().await.take() {
+        let game = { game.lock().take() };
+        if let Some(mut game) = game {
           game.destroy().await;
           drop(game);
-          ribbon.emit(send::client::game::Over::Leave).await;
+          ribbon.emit(send::client::game::Over::Leave).await.ok();
         }
       })
       .await;
@@ -459,10 +460,11 @@ impl Room {
       .hook
       .on::<recv::room::Kick>(async move |_| {
         hook.destroy().await;
-        if let Some(mut game) = game.lock().await.take() {
+        let game = { game.lock().take() };
+        if let Some(mut game) = game {
           game.destroy().await;
           drop(game);
-          ribbon.emit(send::client::game::Over::Leave).await;
+          ribbon.emit(send::client::game::Over::Leave).await.ok();
         }
       })
       .await;
@@ -474,6 +476,16 @@ impl Room {
       .wrap::<recv::room::Leave>(send::room::Leave {})
       .await
       .ok();
+  }
+
+  /// Internal
+  pub async fn destroy(&self) {
+    self.hook.destroy().await;
+    let game = { self.game.lock().take() };
+    if let Some(mut game) = game {
+      game.destroy().await;
+      self.ribbon.emit(send::client::game::Over::Leave).await.ok();
+    }
   }
 
   pub async fn state(&self) -> RoomState {
@@ -506,7 +518,11 @@ impl Room {
   }
 
   pub async fn unban(&mut self, id: &str) {
-    self.ribbon.emit(send::room::Unban(id.to_string())).await;
+    self
+      .ribbon
+      .emit(send::room::Unban(id.to_string()))
+      .await
+      .ok();
   }
 
   pub async fn chat(&mut self, message: &str) -> Result<recv::room::Chat, ribbon::WrapError> {
@@ -642,7 +658,7 @@ impl Room {
 
   pub async fn _set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
     self.state.lock().spectating_strategy = strategy.clone();
-    if let Some(game) = self.game.lock().await.as_ref().clone() {
+    if let Some(game) = self.game.lock().as_ref().clone() {
       game._set_spectating_strategy(strategy).await;
     }
   }

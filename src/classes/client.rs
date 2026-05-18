@@ -1,6 +1,7 @@
 use std::{pin::Pin, sync::Arc};
 
-use tokio::{select, sync::Mutex};
+use parking_lot::Mutex;
+use tokio::select;
 
 use crate::{
   classes::{
@@ -75,17 +76,23 @@ impl Default for GameOptions {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct ClientState {
+  pub disconnected: bool,
+  pub handling: Handling,
+  pub spectating_strategy: SpectatingStrategy,
+}
+
+#[derive(Debug, Clone)]
 pub struct Client {
   pub user: ClientUser,
-  pub disconnected: bool,
   pub token: String,
   pub ribbon: Ribbon,
   pub social: Social,
   pub room: Arc<Mutex<Option<Room>>>,
   pub game: Arc<Mutex<Option<Game>>>,
   pub api: Arc<Api>,
-  pub handling: Handling,
-  spectating_strategy: SpectatingStrategy,
+  pub state: Arc<Mutex<ClientState>>,
 }
 
 impl Client {
@@ -105,7 +112,7 @@ impl Client {
         .transport
         .unwrap_or_default()
       {
-        super::ribbon::Transport::JSON => api::Transport::JSON,
+        super::ribbon::Transport::JSON => api::Transport::Binary,
       },
     };
 
@@ -163,17 +170,16 @@ impl Client {
     select! {
       biased;
       ready = ribbon.wait::<recv::client::Ready>() => {
-        res.lock().await.replace(ready.map_or_else(|| Err(format!("Failed to connect: server disconnected")), |v| Ok(v)));
+        res.lock().replace(ready.map_or_else(|| Err(format!("Failed to connect: server disconnected")), |v| Ok(v)));
       }
 
       _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-        res.lock().await.replace(Err("Failed to connect: Connection timeout".to_string()));
+        res.lock().replace(Err("Failed to connect: Connection timeout".to_string()));
       }
     }
 
     let res = res
       .lock()
-      .await
       .take()
       .unwrap_or_else(|| Err("Failed to connect: unknown error".to_string()));
 
@@ -199,9 +205,11 @@ impl Client {
       )
       .await,
       api,
-      handling,
-      spectating_strategy,
-      disconnected: false,
+      state: Arc::new(Mutex::new(ClientState {
+        handling,
+        spectating_strategy,
+        disconnected: false,
+      })),
       room: Arc::new(Mutex::new(None)),
       game: Arc::new(Mutex::new(None)),
     };
@@ -216,15 +224,15 @@ impl Client {
     let room = self.room.clone();
     let me = self.user.clone();
     let game = self.game.clone();
-    let strategy = self.spectating_strategy;
+    let strategy = self.spectating_strategy();
     self
       .ribbon
       .on::<recv::room::Join>(async move |_| {
         let update = ribbon.wait::<recv::room::Update>().await;
         if let Some(update) = update {
           let r = Room::new(ribbon.clone(), game.clone(), me.clone(), update, strategy).await;
-          room.lock().await.replace(r);
-          ribbon.emit(send::client::room::Join {}).await;
+          room.lock().replace(r);
+          ribbon.emit(send::client::room::Join {}).await.ok();
         }
       })
       .await;
@@ -293,6 +301,15 @@ impl Client {
     //     }
     //   }
     // });
+
+    let state = self.state.clone();
+
+    self
+      .ribbon
+      .on::<recv::client::Dead>(|_| async move {
+        state.lock().disconnected = true;
+      })
+      .await;
   }
 
   pub async fn on<T: Event>(
@@ -314,7 +331,7 @@ impl Client {
   }
 
   pub async fn emit<T: Event>(&mut self, event: T) {
-    self.ribbon.emit(event).await;
+    self.ribbon.emit(event).await.ok();
   }
 
   pub async fn wrap<T: Event>(&mut self, event: impl Event) -> std::result::Result<T, WrapError> {
@@ -330,11 +347,10 @@ impl Client {
   }
 
   pub async fn set_spectating_strategy(&mut self, strategy: SpectatingStrategy) {
-    self.spectating_strategy = strategy;
+    self.state.lock().spectating_strategy = strategy;
     self
       .room
       .lock()
-      .await
       .as_mut()
       .map(|r| r._set_spectating_strategy(strategy));
   }
@@ -359,12 +375,20 @@ impl Client {
     self.api.rooms.list().await
   }
 
-  pub async fn room(&self) -> Option<Room> {
-    self.room.lock().await.clone()
+  pub fn room(&self) -> Option<Room> {
+    self.room.lock().clone()
   }
 
-  pub async fn game(&self) -> Option<Game> {
-    self.game.lock().await.clone()
+  pub fn game(&self) -> Option<Game> {
+    self.game.lock().clone()
+  }
+
+  pub fn spectating_strategy(&self) -> SpectatingStrategy {
+    self.state.lock().spectating_strategy
+  }
+
+  pub fn handling(&self) -> Handling {
+    self.state.lock().handling.clone()
   }
 
   /// Returns ok if successfully registered, error if failed (e.g. not in game)
@@ -375,11 +399,20 @@ impl Client {
     + Sync
     + 'static,
   ) -> Result<(), ()> {
-    if let Some(game) = self.game.lock().await.as_mut() {
+    if let Some(game) = self.game.lock().as_mut() {
       game._register_ticker(func).await?;
       Ok(())
     } else {
       Err(())
     }
+  }
+
+  pub async fn destroy(&self) {
+    let room = { self.room.lock().take() };
+    if let Some(room) = room {
+      room.destroy().await;
+    }
+
+    self.ribbon.destroy().await;
   }
 }

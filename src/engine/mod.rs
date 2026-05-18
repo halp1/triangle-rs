@@ -41,7 +41,7 @@ pub struct GameOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PcOptions {
-  pub garbage: f64,
+  pub garbage: u32,
   pub b2b: u64,
 }
 
@@ -1211,7 +1211,7 @@ impl Engine {
 
     if pc {
       if let Some(pc_opts) = &self.pc {
-        let rounded = self.garbage_queue.round(pc_opts.garbage * garb_mult);
+        let rounded = self.garbage_queue.round(pc_opts.garbage as f64 * garb_mult);
         g_events.push(rounded);
       }
     }

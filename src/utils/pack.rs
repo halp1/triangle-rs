@@ -10,32 +10,19 @@ fn unpacker() -> &'static Unpacker {
       int64_as_type: Some("number".to_string()),
       ..Default::default()
     });
-    unpacker.add_extension(1, |data| {
-			println!("detected extension 1, decoding...");
-      let inner = if data.is_empty() {
-        Value::Nil
-      } else {
-        msgpackr::unpack(data)?
-      };
+    unpacker.add_extension_read(1, |inner| {
       let mut pairs = vec![(Value::Str("success".to_string()), Value::Bool(true))];
       if let Value::Map(extra) = inner {
         pairs.extend(extra);
       }
-			println!("unpacked extension 1: {pairs:?}");
       Ok(Value::Map(pairs))
     });
-    unpacker.add_extension(2, |data| {
-			println!("detected extension 2, decoding...");
-      let inner = if data.is_empty() {
-        Value::Nil
-      } else {
-        msgpackr::unpack(data)?
-      };
+    unpacker.add_extension_read(2, |inner| {
       let mut pairs = vec![(Value::Str("success".to_string()), Value::Bool(false))];
       if !matches!(inner, Value::Nil) {
         pairs.push((Value::Str("error".to_string()), inner));
       }
-			println!("unpacked extension 2: {pairs:?}");
+      println!("unpacked extension 2: {pairs:?}");
       Ok(Value::Map(pairs))
     });
 

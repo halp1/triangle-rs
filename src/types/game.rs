@@ -692,7 +692,7 @@ pub mod tick {
   use futures_util::future::BoxFuture;
   use tokio::sync::Mutex;
 
-  use crate::Engine;
+  use crate::{Engine, engine};
 
   #[derive(Debug, Clone, Eq, PartialEq)]
   pub enum KeypressType {
@@ -715,9 +715,25 @@ pub mod tick {
   }
 
   #[derive(Debug, Clone)]
+  pub struct Garbage {
+    pub column: usize,
+    pub amount: u32,
+  }
+
+  impl From<engine::garbage::OutgoingGarbage> for Garbage {
+    fn from(g: engine::garbage::OutgoingGarbage) -> Self {
+      Self {
+        column: g.column,
+        amount: g.amount,
+      }
+    }
+  }
+
+  #[derive(Debug, Clone)]
   pub struct In {
     pub gameid: u64,
     pub engine: Engine,
+    pub new_garbage: Vec<Garbage>,
   }
 
   pub trait RunAfter: Send {
@@ -749,7 +765,10 @@ pub mod tick {
   }
 
   impl Ticker {
-    pub async fn inject(&self, func: impl Fn(In) -> BoxFuture<'static, Out> + Send + Sync + 'static) {
+    pub async fn inject(
+      &self,
+      func: impl Fn(In) -> BoxFuture<'static, Out> + Send + Sync + 'static,
+    ) {
       let func = Box::new(func);
       let mut ticker = self.0.lock().await;
       *ticker = func;

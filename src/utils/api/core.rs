@@ -57,7 +57,6 @@ impl Transport {
       Transport::Binary => {
         let unpacked = pack::unpack(data)
           .map_err(|e| ApiError::Parse(format!("Failed to unpack binary data: {e}")))?;
-				println!("unpacked binary response: {unpacked}");
         match unpacked
           .as_map()
           .map(|m| {
@@ -139,7 +138,6 @@ pub async fn get<T: DeserializeOwned>(req: Request) -> Result<T, ApiError> {
 
   let raw_bytes = res.bytes().await.map_err(|e| ApiError::Request(e))?;
 
-	println!("decoding response from {}", req.uri);
   req
     .transport
     .decode::<T>(&raw_bytes)?

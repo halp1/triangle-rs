@@ -34,7 +34,7 @@ fn process_relationship(
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Social {
   ribbon: Ribbon,
 
@@ -46,7 +46,7 @@ pub struct Social {
   pub other: Arc<Mutex<Vec<Relationship>>>,
   pub blocked: Arc<Mutex<Vec<Blocked>>>,
   pub notifications: Arc<Mutex<Vec<Notification>>>,
-  pub config: SocialConfig,
+  pub config: Arc<Mutex<SocialConfig>>,
 }
 
 impl Social {
@@ -92,7 +92,7 @@ impl Social {
           .collect(),
       )),
       notifications: Arc::new(Mutex::new(init.notifications)),
-      config,
+      config: Arc::new(Mutex::new(config)),
     };
 
     social.init().await;
@@ -113,7 +113,7 @@ impl Social {
     let notifications = self.notifications.clone();
     let other = self.other.clone();
     let me = self.me.clone();
-    let auto_process_notifications = self.config.auto_process_notifications;
+    let auto_process_notifications = self.config.lock().auto_process_notifications;
     let ribbon = self.ribbon.clone();
 
     self
@@ -136,7 +136,8 @@ impl Social {
                     name: c.user_username,
                     avatar: c.user_avatar,
                   })
-                  .await;
+                  .await
+                  .ok();
 
                 let mut other = other.lock();
                 if !other.iter().any(|r| r.user_id == processed.user_id) {
@@ -154,7 +155,7 @@ impl Social {
 
     let other = self.other.clone();
     let friends = self.friends.clone();
-    let auto_load_dms = self.config.auto_load_dms;
+    let auto_load_dms = self.config.lock().auto_load_dms;
     let me = self.me.clone();
     let ribbon = self.ribbon.clone();
 
@@ -237,11 +238,13 @@ impl Social {
             content: raw.data.content.clone(),
             raw,
           })
-          .await
+          .await.ok();
       })
       .await;
 
-    if self.config.auto_process_notifications {
+		let auto_process_notifications = self.config.lock().auto_process_notifications;
+
+    if auto_process_notifications {
       for n in self.notifications.lock().clone().iter() {
         if !n.seen {
           if n.notification_type == "friend" {
@@ -255,7 +258,8 @@ impl Social {
                     name: processed.user_username,
                     avatar: processed.user_avatar,
                   })
-                  .await;
+                  .await
+                  .ok();
               }
             }
           }
@@ -271,7 +275,7 @@ impl Social {
   }
 
   pub async fn mark_notifications_as_read(&mut self) {
-    self.ribbon.emit(send::social::notification::Ack {}).await;
+    self.ribbon.emit(send::social::notification::Ack {}).await.ok();
 
     self
       .notifications
@@ -378,6 +382,7 @@ impl Social {
     self
       .ribbon
       .emit(send::social::Presence { status, detail })
-      .await;
+      .await
+      .ok();
   }
 }

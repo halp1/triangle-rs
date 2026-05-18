@@ -42,3 +42,4 @@ msgpackr = { path = "msgpackr" }
 tokio = { version = "1", features = ["full", "test-util"] }
 dotenvy = "0.15"
 tracing-subscriber = "0.3.23"
+falcon = { path = "examples/falcon" }

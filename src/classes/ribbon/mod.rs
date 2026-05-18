@@ -99,7 +99,7 @@ bitflags! {
 
 const F_ID_FLAG: u8 = 128;
 
-const SLOW_CODEC_THRESHOLD: Duration = Duration::from_millis(100);
+const SLOW_CODEC_THRESHOLD: Duration = Duration::from_micros(16_670);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)]
@@ -210,6 +210,7 @@ struct RibbonState {
   last_disconnect_reason: String,
   sent_queue: Vec<OutPacket>,
   recv_queue: Vec<InPacket>,
+  close_handle: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 #[derive(Debug)]
@@ -294,6 +295,7 @@ impl Ribbon {
         last_disconnect_reason: String::new(),
         sent_queue: Vec::new(),
         recv_queue: Vec::new(),
+        close_handle: None,
       })),
       reconnect_state: Arc::new(Mutex::new(RibbonReconnectState {
         reconnect_handle: None,
@@ -374,12 +376,6 @@ impl Ribbon {
           true,
         )
         .await;
-    } else {
-      println!(
-        "Encode time for {}: {}µs",
-        msg,
-        end.duration_since(start).as_micros()
-      );
     }
     res
   }
@@ -522,7 +518,7 @@ impl Ribbon {
     let session = self.state.lock().session.clone();
 
     if session.token_id.is_empty() {
-      self.pipe("new", serde_json::json!(null)).await;
+      self.pipe("new", serde_json::json!(null)).await.ok();
     } else {
       self
         .pipe(
@@ -532,7 +528,8 @@ impl Ribbon {
             "tokenid": session.token_id,
           }),
         )
-        .await;
+        .await
+        .ok();
     }
 
     let ribbon = self.clone();
@@ -543,14 +540,14 @@ impl Ribbon {
     Ok(())
   }
 
-  async fn pipe(&self, command: &str, data: serde_json::Value) {
+  async fn pipe(&self, command: &str, data: serde_json::Value) -> Result<(), Error> {
     let packet = self.encode(command, data.clone()).await;
 
     match packet {
       TransportData::UTF8(s) => {
         if let Some(write) = &mut *self.write.lock().await {
           let msg = Message::Text(Utf8Bytes::try_from(s).expect("Failed to convert to UTF-8"));
-          let _ = write.send(msg).await;
+          write.send(msg).await?;
         }
       }
 
@@ -558,7 +555,7 @@ impl Ribbon {
         if (b[0] & F_ID_FLAG) == 0 {
           if let Some(write) = &mut *self.write.lock().await {
             let msg = Message::Binary(b.into());
-            write.send(msg).await.ok();
+            write.send(msg).await?;
           }
         } else {
           let id = {
@@ -597,7 +594,7 @@ impl Ribbon {
 
           if should_send && let Some(write) = &mut *self.write.lock().await {
             let msg = Message::Binary(packet.into());
-            write.send(msg).await.ok();
+            write.send(msg).await?;
           }
         }
       }
@@ -621,9 +618,11 @@ impl Ribbon {
       command: command.into(),
       data: data,
     });
+
+    Ok(())
   }
 
-  pub async fn emit<T: Event>(&self, event: T) {
+  pub async fn emit<T: Event>(&self, event: T) -> Result<(), Error> {
     if T::NAME.starts_with("client.") {
       self.emitter.emit(event);
     } else {
@@ -632,15 +631,16 @@ impl Ribbon {
           T::NAME,
           serde_json::to_value(&event).unwrap_or(serde_json::json!({})),
         )
-        .await;
+        .await?;
     }
+    Ok(())
   }
 
   pub async fn emit_raw(&self, command: &str, data: serde_json::Value) {
     if command.starts_with("client.") {
       self.emitter.emit_raw(command, data);
     } else {
-      self.pipe(command, data).await;
+      self.pipe(command, data).await.ok();
     }
   }
 
@@ -680,15 +680,21 @@ impl Ribbon {
   }
 
   async fn process_queue(&self) {
-    let packets = {
-      let mut state = self.state.lock();
+    let queue_len = {
+      let state = self.state.lock();
       if state.recv_queue.is_empty() {
         return;
       }
+      state.recv_queue.len()
+    };
 
-      if state.recv_queue.len() > CACHE_MAXSIZE {
-        // TODO: close "too many lost packets"
-      }
+    if queue_len > CACHE_MAXSIZE {
+      self.close("too many lost packets").await;
+      return;
+    }
+
+    let packets = {
+      let mut state = self.state.lock();
 
       state.recv_queue.sort_by_key(|p| p.id.unwrap_or(0));
 
@@ -775,7 +781,8 @@ impl Ribbon {
                 }).collect::<Vec<_>>(),
               }),
             )
-            .await;
+            .await
+            .ok();
         } else {
           self
             .pipe(
@@ -786,7 +793,8 @@ impl Ribbon {
                 "signature": spool.signature
               }),
             )
-            .await;
+            .await
+            .ok();
         }
 
         self.state.lock().session.token_id = tokenid;
@@ -864,14 +872,16 @@ impl Ribbon {
                   status: crate::types::social::Status::Online,
                   detail: crate::types::social::Detail::Menus,
                 })
-                .await;
+                .await
+                .ok();
 
               self
                 .emit(send::client::Ready {
                   endpoint: self.uri(spool),
                   social: data.social,
                 })
-                .await;
+                .await
+                .ok();
 
               let role = self.state.lock().me.role.clone();
               match role {
@@ -1031,25 +1041,25 @@ impl Ribbon {
     reconnect_state.reconnect_count += 1;
   }
 
-  pub async fn close(&self, reason: &str) {
+  pub async fn __internal_close(&self, reason: &str, disconnect: bool) {
     {
       let mut state = self.state.lock();
       if !reason.is_empty() {
         state.last_disconnect_reason = reason.to_string();
       }
 
-      self.emitter.emit(send::client::Close {
-        reason: state.last_disconnect_reason.clone(),
-      });
+      self
+        .emitter
+        .emit(send::client::Dead(state.last_disconnect_reason.clone()));
     }
 
     let write_exists = self.write.lock().await.is_some();
 
     if write_exists {
-      self.emit(send::Die {}).await;
+      self.emit(send::Die {}).await.ok();
     }
 
-    if let Some(mut write) = self.write.lock().await.take() {
+    if disconnect && let Some(mut write) = self.write.lock().await.take() {
       write.close().await.ok();
     }
 
@@ -1067,6 +1077,29 @@ impl Ribbon {
       .map(|h| h.abort());
   }
 
+  pub async fn close(&self, reason: &str) {
+    self.__internal_close(reason, true).await;
+  }
+
+  pub async fn close_gracefully(&self) {
+    println!("Closing ribbon gracefully...");
+    if self.write.lock().await.is_none() {
+      return;
+    }
+    let rx = {
+      let (tx, rx) = tokio::sync::oneshot::channel();
+      self.state.lock().close_handle.replace(tx);
+      rx
+    };
+
+    self.__internal_close("", false).await;
+
+    println!("waiting for close confirmation...");
+    rx.await.ok();
+
+    println!("Ribbon closed gracefully.");
+  }
+
   async fn listen(
     mut stream: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     ribbon: Ribbon,
@@ -1077,62 +1110,56 @@ impl Ribbon {
     while let Some(message) = stream.next().await {
       match message {
         Ok(msg) => {
-          match msg {
-            Message::Close(frame) => {
-              if ribbon
-                .state
-                .lock()
-                .flags
-                .intersects(Flags::DEAD | Flags::CONNECTING | Flags::MIGRATING)
-              {
-                return;
-              }
-
-              ribbon
-                .log(
-                  "Close frame received, closing connection",
-                  LogLevel::Warning,
-                  false,
-                )
-                .await;
-
-              let code = frame.as_ref().map(|f| f.code.into()).unwrap_or(0);
-              let reason = close_code_reason(code);
-              ribbon.state.lock().last_disconnect_reason = reason.into();
-              ribbon.state.lock().flags |= Flags::CONNECTING;
-              ribbon.reconnect().await;
-              return;
-            }
-            _ => {}
-          }
-
           let decoded = ribbon
             .decode(match msg {
               Message::Text(ref s) => s.as_bytes(),
               Message::Binary(ref b) => b,
-              _ => {
+              Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+              Message::Close(frame) => {
+                if ribbon
+                  .state
+                  .lock()
+                  .flags
+                  .intersects(Flags::DEAD | Flags::CONNECTING | Flags::MIGRATING)
+                {
+                  return;
+                }
+
+                println!("CLOSE FRAME RECEIVED: {:?}", frame);
+
                 ribbon
                   .log(
-                    &format!("Unsupported message: {:?}", msg),
+                    "Close frame received, closing connection",
                     LogLevel::Warning,
                     false,
                   )
                   .await;
-                continue;
-              } // ignore other message types
+
+                if let Some(tx) = ribbon.state.lock().close_handle.take() {
+                  tx.send(()).ok();
+                }
+
+                let code = frame.as_ref().map(|f| f.code.into()).unwrap_or(1000);
+                let reason = close_code_reason(code);
+                ribbon.state.lock().last_disconnect_reason = reason.into();
+                ribbon.state.lock().flags |= Flags::CONNECTING;
+                ribbon.reconnect().await;
+                return;
+              }
             })
             .await;
 
           {
             let mut state = ribbon.state.lock();
             state.flags |= Flags::ALIVE;
-            state.flags &= !Flags::TIMING_OUT;
+            state.flags.remove(Flags::TIMING_OUT);
           }
 
           ribbon.process_message(decoded).await;
           ribbon.process_queue().await;
         }
         Err(e) => {
+          println!("Error receiving message: {}", e);
           match e {
             Error::ConnectionClosed => {
               ribbon
@@ -1140,11 +1167,17 @@ impl Ribbon {
                 .await;
               // ribbon.state.lock().flags |= Flags::CONNECTING;
               // ribbon.reconnect().await;
+
+              if let Some(tx) = ribbon.state.lock().close_handle.take() {
+                tx.send(()).ok();
+              }
               return;
             }
-
             _ => {
               ribbon.log(&format!("{}", e), LogLevel::Error, true).await;
+              if let Some(tx) = ribbon.state.lock().close_handle.take() {
+                tx.send(()).ok();
+              }
             }
           }
           // handle error
@@ -1175,7 +1208,7 @@ impl Ribbon {
           if !is_alive {
             state.flags |= Flags::TIMING_OUT | Flags::ALIVE | Flags::CONNECTING;
           } else {
-            state.flags &= !Flags::ALIVE;
+            state.flags.remove(Flags::ALIVE);
           }
         }
         (should_ping, is_alive)
@@ -1202,7 +1235,8 @@ impl Ribbon {
                   "recvid": ribbon.state.lock().received_id,
                 }),
               )
-              .await;
+              .await
+              .ok();
           }
         }
       }
@@ -1261,5 +1295,8 @@ impl Ribbon {
       .await
   }
 
-  pub async fn destroy(&self) {}
+  pub async fn destroy(&self) {
+    self.emitter.destroy();
+    self.close_gracefully().await;
+  }
 }

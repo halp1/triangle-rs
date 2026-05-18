@@ -1,3 +1,6 @@
+use std::time::SystemTime;
+
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -19,7 +22,7 @@ pub struct Badge {
   pub id: String,
   pub label: String,
   pub group: Option<String>,
-  pub ts: String,
+  pub ts: Timestamp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,6 +61,57 @@ pub struct Totp {
   pub codes_remaining: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct Timestamp(pub SystemTime);
+
+impl<'de> Deserialize<'de> for Timestamp {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: serde::Deserializer<'de>,
+  {
+    struct Visitor;
+
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+      type Value = Timestamp;
+
+      fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a string or msgpack timestamp")
+      }
+
+      fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<Timestamp, E> {
+        let dt = DateTime::parse_from_rfc3339(s).map_err(serde::de::Error::custom)?;
+        Ok(Timestamp(dt.into()))
+      }
+
+      fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Timestamp, A::Error> {
+        let mut seconds: Option<i64> = None;
+        while let Some(key) = map.next_key::<String>()? {
+          if key == "seconds" {
+            seconds = Some(map.next_value()?);
+          } else {
+            map.next_value::<serde::de::IgnoredAny>()?;
+          }
+        }
+        let secs = seconds.ok_or_else(|| serde::de::Error::missing_field("seconds"))?;
+        let st = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs.max(0) as u64);
+        Ok(Timestamp(st))
+      }
+    }
+
+    deserializer.deserialize_any(Visitor)
+  }
+}
+
+impl Serialize for Timestamp {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    let dt: DateTime<Utc> = self.0.into();
+    serializer.serialize_str(&dt.to_rfc3339())
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Me {
   #[serde(rename = "_id")]
@@ -66,7 +120,7 @@ pub struct Me {
   pub country: Option<String>,
   pub email: Option<String>,
   pub role: Role,
-  pub ts: String,
+  pub ts: Timestamp,
   pub badges: Vec<Badge>,
   pub xp: u64,
   pub privacy_showwon: bool,
@@ -103,7 +157,7 @@ pub struct User {
   pub id: String,
   pub username: String,
   pub role: Role,
-  pub ts: String,
+  pub ts: Timestamp,
   pub badges: Vec<Badge>,
   pub xp: u64,
   pub gamesplayed: u64,
