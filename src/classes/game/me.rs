@@ -128,7 +128,7 @@ impl Me {
   }
 
   pub async fn destroy(&mut self) {
-    self.hook.destroy().await;
+    self.hook.destroy();
 
     let mut state = self.state.lock();
 
@@ -142,50 +142,37 @@ impl Me {
   }
 
   pub async fn init(&self) {
-    self
-      .hook
-      .on::<recv::game::Match>(async |_| {
-        // maybe do something here idk
-      })
-      .await;
-
+    self.hook.on::<recv::game::Match>(async |_| {
+      // maybe do something here idk
+    });
     let me: Me = self.clone();
 
-    self
-      .hook
-      .on::<recv::game::Start>(async move |_| {
-        let m = me.clone();
-        tokio::time::sleep(Duration::from_millis(
-          me.options["countdown_count"].as_u64().unwrap_or(0)
-            * me.options["countdown_interval"].as_u64().unwrap_or(0)
-            + me.options["precountdown"].as_u64().unwrap_or(0)
-            + me.options["prestart"].as_u64().unwrap_or(0),
-        ))
-        .await;
-        me.handles.lock().push(tokio::spawn(async move {
-          m.start_hook.lock().take().map(|tx| tx.send(()).ok());
-        }));
-      })
+    self.hook.on::<recv::game::Start>(async move |_| {
+      let m = me.clone();
+      tokio::time::sleep(Duration::from_millis(
+        me.options["countdown_count"].as_u64().unwrap_or(0)
+          * me.options["countdown_interval"].as_u64().unwrap_or(0)
+          + me.options["precountdown"].as_u64().unwrap_or(0)
+          + me.options["prestart"].as_u64().unwrap_or(0),
+      ))
       .await;
+      me.handles.lock().push(tokio::spawn(async move {
+        m.start_hook.lock().take().map(|tx| tx.send(()).ok());
+      }));
+    });
 
     let me = self.clone();
 
-    self
-      .hook
-      .on::<recv::game::Abort>(async move |_| {
-        me.handles.lock().drain(..).for_each(|h| h.abort());
-      })
-      .await;
+    self.hook.on::<recv::game::Abort>(async move |_| {
+      me.handles.lock().drain(..).for_each(|h| h.abort());
+    });
 
     let me = self.clone();
 
-    self
-      .hook
-      .on::<recv::game::replay::IGE>(async move |ige| {
-        me.state.lock().ige_queue.extend(ige.iges.iter().cloned());
-        me.flush_iges().await;
-      })
-      .await;
+    self.hook.on::<recv::game::replay::IGE>(async move |ige| {
+      me.state.lock().ige_queue.extend(ige.iges.iter().cloned());
+      me.flush_iges().await;
+    });
   }
 
   async fn start(&self, receiver: oneshot::Receiver<()>) {

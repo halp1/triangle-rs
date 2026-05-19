@@ -39,14 +39,14 @@ pub enum DMError {
 
 pub async fn send_dm(
   ribbon: &Ribbon,
-  recipient_id: &str,
-  content: &str,
+  recipient_id: impl ToString,
+  content: impl ToString,
 ) -> Result<recv::social::DM, DMError> {
   match ribbon
     .wrap_with_error::<recv::social::DM>(
       send::social::DM {
-        recipient: recipient_id.into(),
-        msg: content.into(),
+        recipient: recipient_id.to_string(),
+        msg: content.to_string(),
       },
       &["social.dm.fail", "staff.spam", "client.error"],
     )
@@ -76,7 +76,10 @@ pub async fn send_dm(
 }
 
 pub async fn invite(ribbon: &Ribbon, recipient_id: &str) -> Result<(), String> {
-  ribbon.emit(send::social::Invite(recipient_id.into())).await.ok();
+  ribbon
+    .emit(send::social::Invite(recipient_id.into()))
+    .await
+    .ok();
 
   select! {
     biased;

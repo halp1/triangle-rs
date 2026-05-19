@@ -8,6 +8,7 @@ use crate::{
     game::Game,
     ribbon::{self, WrapError},
     room::Room,
+    social,
   },
   types::{
     events::{recv, send},
@@ -59,6 +60,19 @@ impl ClientOptions {
       ribbon: None,
     }
   }
+
+  pub fn with_token_and_handling(token: impl Into<String>, handling: Handling) -> Self {
+    Self {
+      token: Credentials::Token(token.into()),
+      game: Some(GameOptions {
+        handling: Some(handling),
+        spectating_strategy: None,
+      }),
+      user_agent: None,
+      social: None,
+      ribbon: None,
+    }
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +98,13 @@ pub struct ClientState {
 }
 
 #[derive(Debug, Clone)]
+struct RibbonConfig {
+  options: ribbon::Options,
+  transport: ribbon::Transport,
+  user_agent: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct Client {
   pub user: ClientUser,
   pub token: String,
@@ -93,6 +114,7 @@ pub struct Client {
   pub game: Arc<Mutex<Option<Game>>>,
   pub api: Arc<Api>,
   pub state: Arc<Mutex<ClientState>>,
+  ribbon_config: RibbonConfig,
 }
 
 impl Client {
@@ -143,23 +165,29 @@ impl Client {
       .and_then(|g| g.spectating_strategy.clone())
       .unwrap_or(SpectatingStrategy::Instant);
 
-    let session_id = format!("SESS-{}", rand::random::<u64>());
-    let ribbon = Ribbon::new(ribbon::Params {
-      handling: handling.clone(),
+    let ribbon_config = RibbonConfig {
       options: options
         .ribbon
         .clone()
         .unwrap_or_default()
         .options
         .unwrap_or_default(),
-      token: api.config.token.clone(),
       transport: options
         .ribbon
         .clone()
         .unwrap_or_default()
         .transport
         .unwrap_or_default(),
-      user_agent: api.config.user_agent.clone(),
+      user_agent: user_agent.clone(),
+    };
+
+    let session_id = format!("SESS-{}", rand::random::<u64>());
+    let ribbon = Ribbon::new(ribbon::Params {
+      handling: handling.clone(),
+      options: ribbon_config.options.clone(),
+      token: api.config.token.clone(),
+      transport: ribbon_config.transport.clone(),
+      user_agent: ribbon_config.user_agent.clone(),
     })
     .await?;
 
@@ -197,6 +225,7 @@ impl Client {
       user: user.clone(),
       token: api.config.token.clone(),
       ribbon: ribbon.clone(),
+      ribbon_config: ribbon_config.clone(),
       social: Social::new(
         ribbon.clone(),
         user.clone(),
@@ -225,17 +254,14 @@ impl Client {
     let me = self.user.clone();
     let game = self.game.clone();
     let strategy = self.spectating_strategy();
-    self
-      .ribbon
-      .on::<recv::room::Join>(async move |_| {
-        let update = ribbon.wait::<recv::room::Update>().await;
-        if let Some(update) = update {
-          let r = Room::new(ribbon.clone(), game.clone(), me.clone(), update, strategy).await;
-          room.lock().replace(r);
-          ribbon.emit(send::client::room::Join {}).await.ok();
-        }
-      })
-      .await;
+    self.ribbon.on::<recv::room::Join>(async move |_| {
+      let update = ribbon.wait::<recv::room::Update>().await;
+      if let Some(update) = update {
+        let r = Room::new(ribbon.clone(), game.clone(), me.clone(), update, strategy).await;
+        room.lock().replace(r);
+        ribbon.emit(send::client::room::Join {}).await.ok();
+      }
+    });
 
     // self
     //   .ribbon
@@ -304,26 +330,23 @@ impl Client {
 
     let state = self.state.clone();
 
-    self
-      .ribbon
-      .on::<recv::client::Dead>(|_| async move {
-        state.lock().disconnected = true;
-      })
-      .await;
+    self.ribbon.on::<recv::client::Dead>(|_| async move {
+      state.lock().disconnected = true;
+    });
   }
 
-  pub async fn on<T: Event>(
+  pub fn on<T: Event>(
     &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
-    self.ribbon.on(callback).await
+    self.ribbon.on(callback)
   }
 
-  pub async fn once<T: Event>(
+  pub fn once<T: Event>(
     &self,
     callback: impl Fn(T) + Send + Sync + 'static,
   ) -> tokio::task::JoinHandle<()> {
-    self.ribbon.once::<T>(callback).await
+    self.ribbon.once::<T>(callback)
   }
 
   pub async fn wait<T: Event>(&self) -> Option<T> {
@@ -399,12 +422,103 @@ impl Client {
     + Sync
     + 'static,
   ) -> Result<(), ()> {
-    if let Some(game) = self.game.lock().as_mut() {
-      game._register_ticker(func).await?;
+    let ticker = {
+      let game = self.game.lock();
+      game
+        .as_ref()
+        .and_then(|g| g.me.as_ref())
+        .map(|me| me.tick.clone())
+    };
+    if let Some(ticker) = ticker {
+      ticker.inject(func).await;
       Ok(())
     } else {
       Err(())
     }
+  }
+
+  // /**
+  //  * Reconnect the client to TETR.IO.
+  //  * @throws {Error} if the client is already connected
+  //  */
+  // async reconnect() {
+  //   if (!this.disconnected) {
+  //     throw new Error("Client is not disconnected.");
+  //   }
+
+  //   const newRibbon = await this.ribbon.clone();
+  //   this.ribbon.destroy();
+  //   this.ribbon = newRibbon;
+
+  //   const data = await new Promise<Events.in.Client["client.ready"]>(
+  //     (resolve, reject) => {
+  //       const t = setTimeout(() => {
+  //         newRibbon.destroy();
+  //         reject("Failed to connect");
+  //       }, 5000);
+  //       this.ribbon.emitter.once("client.ready", (d) => {
+  //         if (d) {
+  //           clearTimeout(t);
+  //           resolve(d);
+  //         }
+  //       });
+  //     }
+  //   );
+  //   delete this.room;
+  //   this.social = Social.create(this, this.social.config, data.social);
+  // }
+
+  pub async fn reconnect(&mut self) -> Result<(), String> {
+    if !self.state.lock().disconnected {
+      return Err("Client is not disconnected.".to_string());
+    }
+
+    self.social.destroy();
+
+    let new_ribbon = Ribbon::new(ribbon::Params {
+      handling: self.handling(),
+      options: self.ribbon_config.options.clone(),
+      token: self.token.clone(),
+      transport: self.ribbon_config.transport.clone(),
+      user_agent: self.ribbon_config.user_agent.clone(),
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    new_ribbon.emitter.transfer_from(&self.ribbon.emitter);
+    self.ribbon = new_ribbon;
+
+    let res: Arc<Mutex<Option<std::result::Result<recv::client::Ready, String>>>> =
+      Arc::new(Mutex::new(None));
+    select! {
+      biased;
+      ready = self.ribbon.wait::<recv::client::Ready>() => {
+        res.lock().replace(ready.map_or_else(|| Err(format!("Failed to connect: server disconnected")), |v| Ok(v)));
+      }
+
+      _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+        res.lock().replace(Err("Failed to connect: Connection timeout".to_string()));
+      }
+    }
+
+    let res = res
+      .lock()
+      .take()
+      .unwrap_or_else(|| Err("Failed to connect: unknown error".to_string()));
+
+    let ready = res.map_err(|e| e.to_string())?;
+
+    self.state.lock().disconnected = false;
+    *self.room.lock() = None;
+    let social_config = self.social.config.lock().clone();
+    self.social = Social::new(
+      self.ribbon.clone(),
+      self.user.clone(),
+      social_config,
+      ready.social,
+    )
+    .await;
+
+    Ok(())
   }
 
   pub async fn destroy(&self) {

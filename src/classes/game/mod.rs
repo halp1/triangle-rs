@@ -788,6 +788,6 @@ impl Game {
       .take()
       .map(|h| h.abort());
 
-    self.hook.destroy().await;
+    self.hook.destroy();
   }
 }

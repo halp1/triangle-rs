@@ -108,7 +108,7 @@ impl Room {
 
     Self::handle_update(room.state.clone(), _update).await;
 
-    room.init().await;
+    room.init();
 
     room
   }
@@ -145,7 +145,7 @@ impl Room {
       .merge(update.options.unwrap_or_default());
   }
 
-  async fn init(&self) {
+  fn init(&self) {
     let ribbon = self.ribbon.clone();
     let state = self.state.clone();
 
@@ -156,38 +156,30 @@ impl Room {
 
         let players = state.lock().players.clone();
         ribbon.emit(send::client::room::Players(players)).await.ok();
-      })
-      .await;
+      });
 
     let state = self.state.clone();
     self
       .hook
       .on::<recv::room::update::Auto>(async move |event| {
         state.lock().auto = event;
-      })
-      .await;
+      });
 
     let state = self.state.clone();
 
-    self
-      .hook
-      .on::<recv::room::Update>(async move |update| {
-        Self::handle_update(state.clone(), update).await;
-      })
-      .await;
+    self.hook.on::<recv::room::Update>(async move |update| {
+      Self::handle_update(state.clone(), update).await;
+    });
 
     let ribbon = self.ribbon.clone();
     let state = self.state.clone();
 
-    self
-      .hook
-      .on::<recv::room::player::Add>(async move |event| {
-        state.lock().players.push(event.0);
+    self.hook.on::<recv::room::player::Add>(async move |event| {
+      state.lock().players.push(event.0);
 
-        let players = state.lock().players.clone();
-        ribbon.emit(send::client::room::Players(players)).await.ok();
-      })
-      .await;
+      let players = state.lock().players.clone();
+      ribbon.emit(send::client::room::Players(players)).await.ok();
+    });
 
     let ribbon = self.ribbon.clone();
     let state = self.state.clone();
@@ -199,275 +191,247 @@ impl Room {
 
         let players = state.lock().players.clone();
         ribbon.emit(send::client::room::Players(players)).await.ok();
-      })
-      .await;
+      });
 
     let ribbon = self.ribbon.clone();
     let state = self.state.clone();
     let game = self.game.clone();
     let me = self.me.clone();
 
-    self
-      .hook
-      .on::<recv::game::Ready>(async move |data| {
-        let spectating_strategy = state.lock().spectating_strategy.clone();
-        let g = Game::new(
-          ribbon.clone(),
-          me,
-          data.players.clone(),
-          spectating_strategy,
-        )
-        .await;
-
-        game.lock().replace(g);
-
-        if data.is_new {
-          state.lock().game_start = Some(std::time::Instant::now());
-
-          // TODO: replay generator
-
-          let r#match = state.lock().match_config.clone();
-
-          ribbon
-            .emit(send::client::game::Start {
-              multi: r#match.ft > 1 || r#match.wb > 1,
-              first_to: r#match.ft,
-              win_by: r#match.wb,
-              golden_point: r#match.gp,
-              players: data
-                .players
-                .iter()
-                .map(|p| {
-                  (
-                    p.userid.clone(),
-                    p.options["username"]
-                      .as_str()
-                      .unwrap_or_default()
-                      .to_string(),
-                  )
-                })
-                .collect(),
-            })
-            .await
-            .ok();
-        }
-      })
+    self.hook.on::<recv::game::Ready>(async move |data| {
+      let spectating_strategy = state.lock().spectating_strategy.clone();
+      let g = Game::new(
+        ribbon.clone(),
+        me,
+        data.players.clone(),
+        spectating_strategy,
+      )
       .await;
+
+      game.lock().replace(g);
+
+      if data.is_new {
+        state.lock().game_start = Some(std::time::Instant::now());
+
+        // TODO: replay generator
+
+        let r#match = state.lock().match_config.clone();
+
+        ribbon
+          .emit(send::client::game::Start {
+            multi: r#match.ft > 1 || r#match.wb > 1,
+            first_to: r#match.ft,
+            win_by: r#match.wb,
+            golden_point: r#match.gp,
+            players: data
+              .players
+              .iter()
+              .map(|p| {
+                (
+                  p.userid.clone(),
+                  p.options["username"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                )
+              })
+              .collect(),
+          })
+          .await
+          .ok();
+      }
+    });
 
     // TODO: pipe replay data to replay generator
 
     let ribbon = self.ribbon.clone();
     let game = self.game.clone();
 
-    self
-      .hook
-      .on::<recv::game::replay::End>(async move |data| {
-        let mut me = {
-          // TODO: die in replay generator
-          let game = game.lock();
-          let gameid = game.as_ref().and_then(|g| g.me.as_ref().map(|m| m.gameid));
-          if game.is_none() || gameid.map_or(true, |p| p != data.gameid) {
-            return;
-          }
-          game.as_ref().unwrap().me.as_ref().unwrap().clone()
-        };
+    self.hook.on::<recv::game::replay::End>(async move |data| {
+      let mut me = {
+        // TODO: die in replay generator
+        let game = game.lock();
+        let gameid = game.as_ref().and_then(|g| g.me.as_ref().map(|m| m.gameid));
+        if game.is_none() || gameid.map_or(true, |p| p != data.gameid) {
+          return;
+        }
+        game.as_ref().unwrap().me.as_ref().unwrap().clone()
+      };
 
-        me.destroy().await;
+      me.destroy().await;
 
+      ribbon
+        .emit(send::client::game::Over::Finish(data.data))
+        .await
+        .ok();
+    });
+
+    let ribbon = self.ribbon.clone();
+    let game = self.game.clone();
+
+    self.hook.on::<recv::game::Advance>(async move |_| {
+      // TODO: end round in replay generator
+
+      let game = { game.lock().take() };
+      if let Some(mut game) = game {
+        game.destroy().await;
+        ribbon.emit(send::client::game::Over::End).await.ok();
+      }
+    });
+
+    let ribbon = self.ribbon.clone();
+    let game = self.game.clone();
+
+    self.hook.on::<recv::game::Score>(async move |data| {
+      let game = { game.lock().take() };
+      if let Some(mut game) = game {
+        game.destroy().await;
         ribbon
-          .emit(send::client::game::Over::Finish(data.data))
+          .emit(send::client::game::round::End(
+            data.scoreboard.first().map(|s| s.id.clone()),
+          ))
           .await
           .ok();
-      })
-      .await;
-
-    let ribbon = self.ribbon.clone();
-    let game = self.game.clone();
-
-    self
-      .hook
-      .on::<recv::game::Advance>(async move |_| {
-        // TODO: end round in replay generator
-
-        let game = { game.lock().take() };
-        if let Some(mut game) = game {
-          game.destroy().await;
-          ribbon.emit(send::client::game::Over::End).await.ok();
-        }
-      })
-      .await;
-
-    let ribbon = self.ribbon.clone();
-    let game = self.game.clone();
-
-    self
-      .hook
-      .on::<recv::game::Score>(async move |data| {
-        let game = { game.lock().take() };
-        if let Some(mut game) = game {
-          game.destroy().await;
-          ribbon
-            .emit(send::client::game::round::End(
-              data.scoreboard.first().map(|s| s.id.clone()),
-            ))
-            .await
-            .ok();
-        }
-      })
-      .await;
+      }
+    });
 
     let ribbon = self.ribbon.clone();
     let game = self.game.clone();
     let aborting = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    self
-      .hook
-      .on::<recv::game::Abort>(async move |_| {
-        if aborting.swap(true, std::sync::atomic::Ordering::SeqCst) {
-          return;
-        }
+    self.hook.on::<recv::game::Abort>(async move |_| {
+      if aborting.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+      }
 
-        ribbon.emit(send::client::game::Abort).await.ok();
+      ribbon.emit(send::client::game::Abort).await.ok();
 
-        let game = { game.lock().take() };
-        if let Some(mut g) = game {
-          g.destroy().await;
-          ribbon.emit(send::client::game::Over::Abort).await.ok();
-        }
+      let game = { game.lock().take() };
+      if let Some(mut g) = game {
+        g.destroy().await;
+        ribbon.emit(send::client::game::Over::Abort).await.ok();
+      }
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        aborting.store(false, std::sync::atomic::Ordering::SeqCst);
-      })
-      .await;
+      tokio::time::sleep(Duration::from_millis(50)).await;
+      aborting.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
 
     let ribbon = self.ribbon.clone();
     let game = self.game.clone();
     let state = self.state.clone();
 
-    self
-      .hook
-      .on::<recv::game::End>(async move |data| {
-        let (use_scoreboard, game_start, match_config) = {
-          let s = state.lock();
-          (
-            s.match_config.ft == 1 && s.match_config.wb == 1,
-            s.game_start,
-            s.match_config.clone(),
-          )
-        };
+    self.hook.on::<recv::game::End>(async move |data| {
+      let (use_scoreboard, game_start, match_config) = {
+        let s = state.lock();
+        (
+          s.match_config.ft == 1 && s.match_config.wb == 1,
+          s.game_start,
+          s.match_config.clone(),
+        )
+      };
 
-        let _ = match_config;
+      let _ = match_config;
 
-        let round_winner = if use_scoreboard {
-          data
-            .scoreboard
-            .as_ref()
-            .and_then(|sb| sb.first().map(|s| s.id.clone()))
-        } else {
-          data
-            .leaderboard
-            .as_ref()
-            .and_then(|lb| lb.first().map(|l| l.id.clone()))
-        };
+      let round_winner = if use_scoreboard {
+        data
+          .scoreboard
+          .as_ref()
+          .and_then(|sb| sb.first().map(|s| s.id.clone()))
+      } else {
+        data
+          .leaderboard
+          .as_ref()
+          .and_then(|lb| lb.first().map(|l| l.id.clone()))
+      };
 
-        ribbon
-          .emit(send::client::game::round::End(round_winner))
-          .await
-          .ok();
+      ribbon
+        .emit(send::client::game::round::End(round_winner))
+        .await
+        .ok();
 
-        let duration_ms = game_start
-          .map(|s| s.elapsed().as_secs_f64() * 1000.0)
-          .unwrap_or(0.0);
+      let duration_ms = game_start
+        .map(|s| s.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0);
 
-        let end_event = if use_scoreboard {
-          let scoreboard = data.scoreboard.unwrap_or_default();
-          send::client::game::End {
-            duration_ms,
-            source: send::client::game::EndSource::Scoreboard,
-            players: scoreboard
-              .iter()
-              .map(|item| send::client::game::EndPlayer {
-                id: item.id.clone(),
-                name: item.username.clone(),
-                points: if item.alive && item.active { 1 } else { 0 },
-                won: item.alive && item.active,
-                lifetime: Some(item.lifetime),
-                raw: serde_json::to_value(item).unwrap_or_default(),
-              })
-              .collect(),
-          }
-        } else {
-          let leaderboard = data.leaderboard.unwrap_or_default();
-          let max_wins = leaderboard.iter().map(|i| i.wins).max().unwrap_or(0);
-          send::client::game::End {
-            duration_ms,
-            source: send::client::game::EndSource::Leaderboard,
-            players: leaderboard
-              .iter()
-              .map(|item| send::client::game::EndPlayer {
-                id: item.id.clone(),
-                name: item.username.clone(),
-                points: item.wins as i64,
-                won: item.wins == max_wins,
-                lifetime: None,
-                raw: serde_json::to_value(item).unwrap_or_default(),
-              })
-              .collect(),
-          }
-        };
-
-        ribbon.emit(end_event).await.ok();
-
-        let game = { game.lock().take() };
-        if let Some(mut g) = game {
-          g.destroy().await;
-          ribbon.emit(send::client::game::Over::End).await.ok();
+      let end_event = if use_scoreboard {
+        let scoreboard = data.scoreboard.unwrap_or_default();
+        send::client::game::End {
+          duration_ms,
+          source: send::client::game::EndSource::Scoreboard,
+          players: scoreboard
+            .iter()
+            .map(|item| send::client::game::EndPlayer {
+              id: item.id.clone(),
+              name: item.username.clone(),
+              points: if item.alive && item.active { 1 } else { 0 },
+              won: item.alive && item.active,
+              lifetime: Some(item.lifetime),
+              raw: serde_json::to_value(item).unwrap_or_default(),
+            })
+            .collect(),
         }
-      })
-      .await;
+      } else {
+        let leaderboard = data.leaderboard.unwrap_or_default();
+        let max_wins = leaderboard.iter().map(|i| i.wins).max().unwrap_or(0);
+        send::client::game::End {
+          duration_ms,
+          source: send::client::game::EndSource::Leaderboard,
+          players: leaderboard
+            .iter()
+            .map(|item| send::client::game::EndPlayer {
+              id: item.id.clone(),
+              name: item.username.clone(),
+              points: item.wins as i64,
+              won: item.wins == max_wins,
+              lifetime: None,
+              raw: serde_json::to_value(item).unwrap_or_default(),
+            })
+            .collect(),
+        }
+      };
+
+      ribbon.emit(end_event).await.ok();
+
+      let game = { game.lock().take() };
+      if let Some(mut g) = game {
+        g.destroy().await;
+        ribbon.emit(send::client::game::Over::End).await.ok();
+      }
+    });
 
     let state = self.state.clone();
 
-    self
-      .hook
-      .on::<recv::room::Chat>(async move |event| {
-        state.lock().chats.push(event);
-      })
-      .await;
+    self.hook.on::<recv::room::Chat>(async move |event| {
+      state.lock().chats.push(event);
+    });
 
     let ribbon = self.ribbon.clone();
     let hook = self.hook.clone();
     let game = self.game.clone();
 
-    self
-      .hook
-      .on::<recv::room::Leave>(async move |_| {
-        hook.destroy().await;
-        let game = { game.lock().take() };
-        if let Some(mut game) = game {
-          game.destroy().await;
-          drop(game);
-          ribbon.emit(send::client::game::Over::Leave).await.ok();
-        }
-      })
-      .await;
+    self.hook.on::<recv::room::Leave>(async move |_| {
+      hook.destroy();
+      let game = { game.lock().take() };
+      if let Some(mut game) = game {
+        game.destroy().await;
+        drop(game);
+        ribbon.emit(send::client::game::Over::Leave).await.ok();
+      }
+    });
 
     let ribbon = self.ribbon.clone();
     let hook = self.hook.clone();
     let game = self.game.clone();
 
-    self
-      .hook
-      .on::<recv::room::Kick>(async move |_| {
-        hook.destroy().await;
-        let game = { game.lock().take() };
-        if let Some(mut game) = game {
-          game.destroy().await;
-          drop(game);
-          ribbon.emit(send::client::game::Over::Leave).await.ok();
-        }
-      })
-      .await;
+    self.hook.on::<recv::room::Kick>(async move |_| {
+      hook.destroy();
+      let game = { game.lock().take() };
+      if let Some(mut game) = game {
+        game.destroy().await;
+        drop(game);
+        ribbon.emit(send::client::game::Over::Leave).await.ok();
+      }
+    });
   }
 
   pub async fn leave(&mut self) {
@@ -480,7 +444,7 @@ impl Room {
 
   /// Internal
   pub async fn destroy(&self) {
-    self.hook.destroy().await;
+    self.hook.destroy();
     let game = { self.game.lock().take() };
     if let Some(mut game) = game {
       game.destroy().await;

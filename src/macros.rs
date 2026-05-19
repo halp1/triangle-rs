@@ -1,7 +1,8 @@
+#[macro_export]
 macro_rules! event {
 	($($path:ident).+ => $struct_name:ident = $original:path) => {
 		pub type $struct_name = $original;
-		impl crate::utils::events::Event for $struct_name {
+		impl $crate::utils::events::Event for $struct_name {
 			const NAME: &'static str = stringify!($($path).+);
 		}
 	};
@@ -10,7 +11,7 @@ macro_rules! event {
 		#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 		pub struct $struct_name;
 
-		impl crate::utils::events::Event for $struct_name {
+		impl $crate::utils::events::Event for $struct_name {
 			const NAME: &'static str = stringify!($($path).+);
 		}
 	};
@@ -19,10 +20,10 @@ macro_rules! event {
 		#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 		pub struct $struct_name(pub $inner);
 
-		impl crate::utils::events::Event for $struct_name {
+		impl $crate::utils::events::Event for $struct_name {
 			const NAME: &'static str = stringify!($($path).+);
 		}
-};
+	};
 
 	($($path:ident).+ => $struct_name:ident { $($field:ident : $ty:ty),* $(,)? }) => {
 		#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -30,7 +31,7 @@ macro_rules! event {
 			$(pub $field: $ty),*
 		}
 
-		impl crate::utils::events::Event for $struct_name {
+		impl $crate::utils::events::Event for $struct_name {
 			const NAME: &'static str = stringify!($($path).+);
 		}
 	};
@@ -53,7 +54,7 @@ macro_rules! partial {
 			$(pub $field: Option<$ty>),*
 		}
 
-		impl crate::utils::Partial for $name {
+		impl $crate::utils::Partial for $name {
 			type Target = $name;
 
 			fn merge(self, other: Self) -> Self {

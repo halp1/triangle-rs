@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use serde_json::Value;
+use thiserror::Error;
 use tokio::sync::broadcast;
 
 const BROADCAST_CAPACITY: usize = 1024;
@@ -16,10 +17,13 @@ pub trait Event:
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum WrapError {
+  #[error("Server connection dropped")]
   ServerError,
+  #[error("Failed to parse event: {0}")]
   ParseError(serde_json::Error),
+  #[error("Received error event: {0} with data {1}")]
   Error(String, Value),
 }
 
@@ -100,7 +104,7 @@ impl EventEmitter {
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     let Some(mut rx) = self.subscribe() else {
-			tracing::error!("Failed to subscribe to events: no broadcaster available");
+      tracing::error!("Failed to subscribe to events: no broadcaster available");
       return tokio::spawn(async {});
     };
     tokio::spawn(async move {
@@ -203,5 +207,9 @@ impl EventEmitter {
   pub fn clear(&self) {
     let (new_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
     self.tx.store(Some(Arc::new(new_tx)));
+  }
+
+  pub fn transfer_from(&self, other: &Self) {
+    self.tx.store(other.tx.load_full());
   }
 }

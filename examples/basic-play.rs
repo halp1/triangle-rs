@@ -67,8 +67,7 @@ async fn main() {
       .ribbon
       .on::<recv::client::DM>(async move |dm| {
         tracing::info!("Received DM from {}: {}", dm.username, dm.content);
-      })
-      .await;
+      });
 
     let invite = client
       .wait::<recv::social::Invite>()
@@ -92,8 +91,7 @@ async fn main() {
     client
       .on::<recv::client::Dead>(|_| async {
         panic!("Connection closed permanently");
-      })
-      .await;
+      });
 
     loop {
       client

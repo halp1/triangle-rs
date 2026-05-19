@@ -5,8 +5,7 @@ use parking_lot::Mutex;
 
 use crate::{
   classes::{
-    ClientUser, Ribbon,
-    social::relationship::{DMError, Relationship},
+    ClientUser, Ribbon, ribbon::Hook, social::relationship::{DMError, Relationship}
   },
   types::{
     events::{recv, send},
@@ -37,6 +36,7 @@ fn process_relationship(
 #[derive(Debug, Clone)]
 pub struct Social {
   ribbon: Ribbon,
+	hook: Hook,
 
   me: ClientUser,
 
@@ -62,8 +62,9 @@ impl Social {
       .map(|r| process_relationship(r, &me.id))
       .collect::<Vec<_>>();
 
-    let mut social = Self {
+    let social = Self {
       ribbon: ribbon.clone(),
+			hook: ribbon.hook(),
       me,
       online: Arc::new(Mutex::new(init.total_online)),
       friends: Arc::new(Mutex::new(
@@ -100,15 +101,12 @@ impl Social {
     social
   }
 
-  async fn init(&mut self) {
+  async fn init(&self) {
     let online = self.online.clone();
-    self
-      .ribbon
-      .on::<recv::social::Online>(async move |data| {
-        let mut online = online.lock();
-        *online = data.0;
-      })
-      .await;
+    let _ = self.hook.on::<recv::social::Online>(async move |data| {
+      let mut online = online.lock();
+      *online = data.0;
+    });
 
     let notifications = self.notifications.clone();
     let other = self.other.clone();
@@ -116,7 +114,7 @@ impl Social {
     let auto_process_notifications = self.config.lock().auto_process_notifications;
     let ribbon = self.ribbon.clone();
 
-    self
+    let _ = self
       .ribbon
       .on::<recv::social::Notification>(async move |n| {
         {
@@ -150,8 +148,7 @@ impl Social {
             }
           }
         }
-      })
-      .await;
+      });
 
     let other = self.other.clone();
     let friends = self.friends.clone();
@@ -159,93 +156,92 @@ impl Social {
     let me = self.me.clone();
     let ribbon = self.ribbon.clone();
 
-    self
-      .ribbon
-      .on::<recv::social::DM>(async move |raw| {
-        let mut target = raw.data.user.clone();
-        let mut username = "".to_string();
+    let _ = self.hook.on::<recv::social::DM>(async move |raw| {
+      let mut target = raw.data.user.clone();
+      let mut username = "".to_string();
 
-        if target == me.id {
-          if let Some(id) = raw.stream.split(':').find(|id| *id != me.id) {
-            target = id.to_string();
-          } else {
-            return;
-          }
-        }
-
-        let user = {
-          let other = other.lock();
-          let friends = friends.lock();
-
-          other
-            .iter()
-            .find(|u| u.user_id == target)
-            .or_else(|| friends.iter().find(|u| u.user_id == target))
-            .cloned()
-        };
-
-        if let Some(user) = user {
-          if !user.dms_loaded().await && auto_load_dms {
-            user.load_dms().await.ok();
-          } else {
-            user._add_dm(raw.clone()).await;
-          }
-
-          username = user.username.clone();
+      if target == me.id {
+        if let Some(id) = raw.stream.split(':').find(|id| *id != me.id) {
+          target = id.to_string();
         } else {
-          if let Ok(u) = ribbon.api.users.get(&target.clone()).await {
-            let new_rel = Relationship::new(
-              ribbon.clone(),
-              relationship::ProcessedRelationship {
-                original: rel::Relationship {
-                  unread: 0,
-                  updated: "".into(),
-                  id: "".to_string(),
-                  from: rel::User {
-                    id: "".into(),
-                    username: "".into(),
-                    avatar_revision: None,
-                  },
-                  to: rel::User {
-                    id: "".into(),
-                    username: "".into(),
-                    avatar_revision: None,
-                  },
-                  relationship_type: rel::Type::Pending,
-                },
-                user_id: u.id,
-                user_username: u.username.clone(),
-                user_avatar: u.avatar_revision,
-              },
-            );
-
-            other.lock().push(new_rel);
-
-            username = u.username;
-          } else {
-            tracing::warn!("Failed to fetch user information for DM");
-          }
-        }
-
-        if raw.data.user == me.id {
           return;
         }
+      }
 
-        ribbon
-          .emit(send::client::DM {
-            user_id: target,
-            username: username.into(),
-            content: raw.data.content.clone(),
-            raw,
-          })
-          .await.ok();
-      })
-      .await;
+      let user = {
+        let other = other.lock();
+        let friends = friends.lock();
 
-		let auto_process_notifications = self.config.lock().auto_process_notifications;
+        other
+          .iter()
+          .find(|u| u.user_id == target)
+          .or_else(|| friends.iter().find(|u| u.user_id == target))
+          .cloned()
+      };
+
+      if let Some(user) = user {
+        if !user.dms_loaded().await && auto_load_dms {
+          user.load_dms().await.ok();
+        } else {
+          user._add_dm(raw.clone()).await;
+        }
+
+        username = user.username.clone();
+      } else {
+        if let Ok(u) = ribbon.api.users.get(&target.clone()).await {
+          let new_rel = Relationship::new(
+            ribbon.clone(),
+            relationship::ProcessedRelationship {
+              original: rel::Relationship {
+                unread: 0,
+                updated: "".into(),
+                id: "".to_string(),
+                from: rel::User {
+                  id: "".into(),
+                  username: "".into(),
+                  avatar_revision: None,
+                },
+                to: rel::User {
+                  id: "".into(),
+                  username: "".into(),
+                  avatar_revision: None,
+                },
+                relationship_type: rel::Type::Pending,
+              },
+              user_id: u.id,
+              user_username: u.username.clone(),
+              user_avatar: u.avatar_revision,
+            },
+          );
+
+          other.lock().push(new_rel);
+
+          username = u.username;
+        } else {
+          tracing::warn!("Failed to fetch user information for DM");
+        }
+      }
+
+      if raw.data.user == me.id {
+        return;
+      }
+
+      ribbon
+        .emit(send::client::DM {
+          user_id: target,
+          username: username.into(),
+          content: raw.data.content.clone(),
+          raw,
+        })
+        .await
+        .ok();
+    });
+
+    let auto_process_notifications = self.config.lock().auto_process_notifications;
 
     if auto_process_notifications {
-      for n in self.notifications.lock().clone().iter() {
+      let notifications = self.notifications.lock().clone();
+      for n in &notifications {
         if !n.seen {
           if n.notification_type == "friend" {
             if let Some(rel) = n.data.get("relationship") {
@@ -274,8 +270,12 @@ impl Social {
     *self.online.lock()
   }
 
-  pub async fn mark_notifications_as_read(&mut self) {
-    self.ribbon.emit(send::social::notification::Ack {}).await.ok();
+  pub async fn mark_notifications_as_read(&self) {
+    self
+      .ribbon
+      .emit(send::social::notification::Ack {})
+      .await
+      .ok();
 
     self
       .notifications
@@ -294,11 +294,11 @@ impl Social {
     self.ribbon.api.users.get(user_id).await
   }
 
-  pub async fn dm(&self, user_id: &str, content: &str) -> Result<recv::social::DM, DMError> {
-    relationship::send_dm(&mut self.ribbon.clone(), user_id, content).await
+  pub async fn dm(&self, user_id: impl ToString, content: impl ToString) -> Result<recv::social::DM, DMError> {
+    relationship::send_dm(&self.ribbon, user_id, content).await
   }
 
-  pub async fn friend(&mut self, user_id: &str) -> Result<bool, ApiError> {
+  pub async fn friend(&self, user_id: &str) -> Result<bool, ApiError> {
     if self.friends.lock().iter().any(|f| f.user_id == user_id) {
       return Ok(false);
     }
@@ -332,7 +332,7 @@ impl Social {
     Ok(true)
   }
 
-  pub async fn unfriend(&mut self, user_id: &str) -> Result<bool, ApiError> {
+  pub async fn unfriend(&self, user_id: &str) -> Result<bool, ApiError> {
     if self.friends.lock().iter().all(|f| f.user_id != user_id) {
       return Ok(false);
     }
@@ -343,7 +343,7 @@ impl Social {
     Ok(true)
   }
 
-  pub async fn block(&mut self, user_id: &str) -> Result<bool, ApiError> {
+  pub async fn block(&self, user_id: &str) -> Result<bool, ApiError> {
     if self.blocked.lock().iter().any(|b| b.id == user_id) {
       return Ok(false);
     }
@@ -362,7 +362,7 @@ impl Social {
     Ok(true)
   }
 
-  pub async fn unblock(&mut self, user_id: &str) -> Result<bool, ApiError> {
+  pub async fn unblock(&self, user_id: &str) -> Result<bool, ApiError> {
     if self.blocked.lock().iter().all(|b| b.id != user_id) {
       return Ok(false);
     }
@@ -374,15 +374,19 @@ impl Social {
     Ok(true)
   }
 
-  pub async fn invite(&mut self, user_id: &str) -> Result<(), String> {
-    relationship::invite(&mut self.ribbon, user_id).await
+  pub async fn invite(&self, user_id: &str) -> Result<(), String> {
+    relationship::invite(&self.ribbon, user_id).await
   }
 
-  pub async fn set_status(&mut self, status: social::Status, detail: social::Detail) {
+  pub async fn set_status(&self, status: social::Status, detail: social::Detail) {
     self
       .ribbon
       .emit(send::social::Presence { status, detail })
       .await
       .ok();
   }
+
+	pub fn destroy(&self) {
+		self.hook.destroy();
+	}
 }

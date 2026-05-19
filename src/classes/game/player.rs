@@ -106,8 +106,7 @@ impl Player {
             ));
           }
         }
-      })
-      .await;
+      });
 
     let state = player.state.clone();
 
@@ -123,8 +122,7 @@ impl Player {
         }
 
         state.queue.append(&mut event.frames.clone());
-      })
-      .await;
+      });
 
     player
   }
@@ -189,7 +187,7 @@ impl Player {
       self.unspectate().await;
     }
 
-    self.hook.destroy().await;
+    self.hook.destroy();
   }
 
   fn tick_once(&self, state: &mut MutexGuard<'_, PlayerState>) {

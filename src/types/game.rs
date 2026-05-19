@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::macros::partial;
+use crate::{engine::{queue::bag::BagType, utils::KickTable}, macros::partial};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -114,13 +114,13 @@ pub enum Spin {
 }
 
 impl Spin {
-	pub fn as_str(&self) -> &'static str {
-		match self {
-			Spin::None => "none",
-			Spin::Mini => "mini",
-			Spin::Normal => "normal",
-		}
-	}
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Spin::None => "none",
+      Spin::Mini => "mini",
+      Spin::Normal => "normal",
+    }
+  }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -226,6 +226,16 @@ pub struct Handling {
   pub ihs: Buffering,
 }
 
+impl Handling {
+  pub fn is_safe(&self) -> bool {
+    let m = |x: f64| {
+      let remainder = (x * 10.0).fract().abs();
+      remainder < 1e-9 || remainder > (1.0 - 1e-9)
+    };
+    m(self.arr) && m(self.das) && m(self.dcd) && m(self.sdf)
+  }
+}
+
 impl Default for Handling {
   fn default() -> Self {
     Self {
@@ -278,10 +288,10 @@ partial!(Options {
   garbagetargetbonus: GarbageTargetBonus,
   garbagespecialbonus: bool,
   usebombs: bool,
-  bagtype: String,
+  bagtype: BagType,
   spinbonuses: SpinBonuses,
   combotable: ComboTable,
-  kickset: String,
+  kickset: KickTable,
   nextcount: u32,
   infinite_movement: bool,
   allow_harddrop: bool,

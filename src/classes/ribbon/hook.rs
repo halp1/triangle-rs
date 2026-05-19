@@ -29,7 +29,7 @@ impl Hook {
     }
   }
 
-  pub async fn on<T: Event>(
+  pub fn on<T: Event>(
     &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> &Self {
@@ -38,7 +38,7 @@ impl Hook {
     self
   }
 
-  pub async fn once<T: Event>(&self, callback: impl Fn(T) + Send + 'static) -> &Self {
+  pub fn once<T: Event>(&self, callback: impl Fn(T) + Send + 'static) -> &Self {
     let handle = self.emitter.once(callback);
     self.handles.lock().push(handle);
     self
@@ -48,7 +48,7 @@ impl Hook {
     self.emitter.wait::<T>().await
   }
 
-  pub async fn destroy(&self) {
+  pub fn destroy(&self) {
     for handle in self.handles.lock().drain(..) {
       handle.abort();
     }

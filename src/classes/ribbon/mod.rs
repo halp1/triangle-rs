@@ -1226,14 +1226,14 @@ impl Ribbon {
     self.emitter.wait::<T>().await
   }
 
-  pub async fn on<T: Event>(
+  pub fn on<T: Event>(
     &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     self.emitter.on(callback)
   }
 
-  pub async fn once<T: Event>(
+  pub fn once<T: Event>(
     &self,
     callback: impl Fn(T) + Send + Sync + 'static,
   ) -> tokio::task::JoinHandle<()> {

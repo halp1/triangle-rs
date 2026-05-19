@@ -1,5 +1,6 @@
 use reqwest::Client;
 use serde::{Serialize, de::DeserializeOwned};
+use thiserror::Error;
 
 use crate::utils::pack;
 
@@ -114,11 +115,15 @@ pub struct Request {
   pub uri: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum ApiError {
+	#[error("Request error: {0}")]
   Request(reqwest::Error),
+  #[error("Parse error: {0}")]
   Parse(String),
+  #[error("Server error: {0}")]
   Server(String),
+  #[error("Alternate error: {0}")]
   Alternate(String),
 }
 
