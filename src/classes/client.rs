@@ -200,7 +200,8 @@ impl Client {
         res.lock().replace(ready.map_or_else(|| Err(format!("Failed to connect: server disconnected")), |v| Ok(v)));
       }
 
-      _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+      _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
+				ribbon.destroy().await;
         res.lock().replace(Err("Failed to connect: Connection timeout".to_string()));
       }
     }
@@ -476,7 +477,7 @@ impl Client {
         res.lock().replace(ready.map_or_else(|| Err(format!("Failed to connect: server disconnected")), |v| Ok(v)));
       }
 
-      _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+      _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
         res.lock().replace(Err("Failed to connect: Connection timeout".to_string()));
       }
     }
