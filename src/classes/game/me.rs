@@ -127,7 +127,7 @@ impl Me {
     s
   }
 
-  pub async fn destroy(&mut self) {
+  pub fn destroy(&mut self) {
     self.hook.destroy();
 
     let mut state = self.state.lock();
@@ -171,7 +171,7 @@ impl Me {
 
     self.hook.on::<recv::game::replay::IGE>(async move |ige| {
       me.state.lock().ige_queue.extend(ige.iges.iter().cloned());
-      me.flush_iges().await;
+      me.flush_iges();
     });
   }
 
@@ -196,7 +196,7 @@ impl Me {
         state.target.clone()
       };
 
-      me.set_target(target).await.ok();
+      me.set_target(target).ok();
 
       me.ribbon
         .emit(recv::client::game::round::Start {})
@@ -303,7 +303,7 @@ impl Me {
       }
     }
 
-    self.flush_iges().await;
+    self.flush_iges();
 
     let (frame, start_time) = {
       let mut state = self.state.lock();
@@ -399,7 +399,7 @@ impl Me {
     (true, false, target)
   }
 
-  async fn flush_iges(&self) {
+  fn flush_iges(&self) {
     let iges = {
       let mut state = self.state.lock();
       if state.force_pause_iges || (state.pause_iges && !state.key_queue.is_empty()) {
@@ -417,11 +417,11 @@ impl Me {
     };
 
     for ige in iges {
-      self.__internal_handle_ige(ige).await;
+      self.__internal_handle_ige(ige);
     }
   }
 
-  async fn __internal_handle_ige(&self, ige: ige::IGE) {
+  fn __internal_handle_ige(&self, ige: ige::IGE) {
     let mut state = self.state.lock();
     let frame = Frame {
       frame: state.engine.frame,
@@ -448,7 +448,7 @@ impl Me {
     }
   }
 
-  pub async fn set_target(&self, target: TargetingStrategy) -> Result<(), String> {
+  pub fn set_target(&self, target: TargetingStrategy) -> Result<(), String> {
     let mut state = self.state.lock();
 
     if !state.can_target {
@@ -476,22 +476,22 @@ impl Me {
     Ok(())
   }
 
-  pub async fn set_pause_iges(&mut self, pause: bool) {
+  pub fn set_pause_iges(&self, pause: bool) {
     {
       let mut state = self.state.lock();
       state.pause_iges = pause;
     };
 
-    self.flush_iges().await;
+    self.flush_iges();
   }
 
-  pub async fn set_force_pause_iges(&mut self, force_pause: bool) {
+  pub fn set_force_pause_iges(&self, force_pause: bool) {
     {
       let mut state = self.state.lock();
       state.force_pause_iges = force_pause;
     };
 
-    self.flush_iges().await;
+    self.flush_iges();
   }
 
   pub fn get_full_frame(&self) -> replay::Frame {

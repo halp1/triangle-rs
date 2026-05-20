@@ -205,8 +205,7 @@ impl Room {
         me,
         data.players.clone(),
         spectating_strategy,
-      )
-      .await;
+      );
 
       game.lock().replace(g);
 
@@ -258,7 +257,7 @@ impl Room {
         game.as_ref().unwrap().me.as_ref().unwrap().clone()
       };
 
-      me.destroy().await;
+      me.destroy();
 
       ribbon
         .emit(send::client::game::Over::Finish(data.data))

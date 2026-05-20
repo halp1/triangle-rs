@@ -419,37 +419,6 @@ impl Client {
     }
   }
 
-  // /**
-  //  * Reconnect the client to TETR.IO.
-  //  * @throws {Error} if the client is already connected
-  //  */
-  // async reconnect() {
-  //   if (!this.disconnected) {
-  //     throw new Error("Client is not disconnected.");
-  //   }
-
-  //   const newRibbon = await this.ribbon.clone();
-  //   this.ribbon.destroy();
-  //   this.ribbon = newRibbon;
-
-  //   const data = await new Promise<Events.in.Client["client.ready"]>(
-  //     (resolve, reject) => {
-  //       const t = setTimeout(() => {
-  //         newRibbon.destroy();
-  //         reject("Failed to connect");
-  //       }, 5000);
-  //       this.ribbon.emitter.once("client.ready", (d) => {
-  //         if (d) {
-  //           clearTimeout(t);
-  //           resolve(d);
-  //         }
-  //       });
-  //     }
-  //   );
-  //   delete this.room;
-  //   this.social = Social.create(this, this.social.config, data.social);
-  // }
-
   pub async fn reconnect(&mut self) -> Result<(), String> {
     if !self.state.lock().disconnected {
       return Err("Client is not disconnected.".to_string());

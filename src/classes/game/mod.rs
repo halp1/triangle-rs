@@ -141,7 +141,7 @@ pub struct Game {
 }
 
 impl Game {
-  pub async fn new(
+  pub fn new(
     ribbon: Ribbon,
     user: ClientUser,
     raw_players: Vec<ReadyPlayer>,
@@ -765,7 +765,7 @@ impl Game {
 
   pub async fn destroy(&mut self) {
     if let Some(mut me) = self.me.take() {
-      me.destroy().await;
+      me.destroy();
       self.me = None;
     }
 
