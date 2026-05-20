@@ -541,6 +541,20 @@ impl Ribbon {
   async fn pipe(&self, command: &str, data: serde_json::Value) -> Result<(), Error> {
     let packet = self.encode(command, data.clone()).await;
 
+    if command != "ping" && self.config.lock().options.logging == LoggingLevel::All {
+      self
+        .log(
+          &format!(
+            "SEND {} {}",
+            command,
+            serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string())
+          ),
+          LogLevel::Info,
+          false,
+        )
+        .await;
+    }
+
     match packet {
       TransportData::UTF8(s) => {
         if let Some(write) = &mut *self.write.lock().await {
@@ -596,20 +610,6 @@ impl Ribbon {
           }
         }
       }
-    }
-
-    if command != "ping" && self.config.lock().options.logging == LoggingLevel::All {
-      self
-        .log(
-          &format!(
-            "SEND {} {}",
-            command,
-            serde_json::to_string_pretty(&data).unwrap_or_else(|_| data.to_string())
-          ),
-          LogLevel::Info,
-          false,
-        )
-        .await;
     }
 
     self.emitter.emit(send::client::ribbon::Send {
@@ -1104,8 +1104,6 @@ impl Ribbon {
                   return;
                 }
 
-                println!("CLOSE FRAME RECEIVED: {:?}", frame);
-
                 ribbon
                   .log(
                     "Close frame received, closing connection",
@@ -1134,7 +1132,6 @@ impl Ribbon {
           ribbon.process_queue().await;
         }
         Err(e) => {
-          println!("Error receiving message: {}", e);
           match e {
             Error::ConnectionClosed => {
               ribbon
@@ -1153,7 +1150,6 @@ impl Ribbon {
         }
       }
     }
-		println!("connection closed");
   }
 
   async fn pinger(ribbon: Ribbon) {
@@ -1213,7 +1209,7 @@ impl Ribbon {
     }
   }
 
-  pub async fn set_faster_ping(&self, value: bool) {
+  pub fn set_faster_ping(&self, value: bool) {
     let mut state = self.state.lock();
     if value {
       state.flags |= Flags::FAST_PING;
@@ -1235,7 +1231,7 @@ impl Ribbon {
 
   pub fn once<T: Event>(
     &self,
-    callback: impl Fn(T) + Send + Sync + 'static,
+    callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     self.emitter.once(callback)
   }

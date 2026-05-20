@@ -442,8 +442,7 @@ impl Room {
       .ok();
   }
 
-  /// Internal
-  pub async fn destroy(&self) {
+  pub(crate) async fn destroy(&self) {
     self.hook.destroy();
     let game = { self.game.lock().take() };
     if let Some(mut game) = game {
@@ -457,12 +456,12 @@ impl Room {
     state
   }
 
-  pub async fn kick(&mut self, id: &str) -> Result<recv::room::player::Remove, ribbon::WrapError> {
+  pub async fn kick(&self, id: &str) -> Result<recv::room::player::Remove, ribbon::WrapError> {
     self.kick_with_duration(id, Duration::from_secs(900)).await
   }
 
   pub async fn kick_with_duration(
-    &mut self,
+    &self,
     id: &str,
     duration: Duration,
   ) -> Result<recv::room::player::Remove, ribbon::WrapError> {
@@ -492,7 +491,7 @@ impl Room {
   pub async fn chat(&mut self, message: &str) -> Result<recv::room::Chat, ribbon::WrapError> {
     self
       .ribbon
-      .wrap::<recv::room::Chat>(send::room::Chat {
+      .wrap::<recv::room::Chat>(send::room::chat::Send {
         content: message.to_string(),
         pinned: false,
       })
@@ -505,7 +504,7 @@ impl Room {
   ) -> Result<recv::room::Chat, ribbon::WrapError> {
     self
       .ribbon
-      .wrap::<recv::room::Chat>(send::room::Chat {
+      .wrap::<recv::room::Chat>(send::room::chat::Send {
         content: message.to_string(),
         pinned: true,
       })

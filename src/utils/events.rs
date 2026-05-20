@@ -141,11 +141,13 @@ impl EventEmitter {
 
   pub fn once<T: Event>(
     &self,
-    callback: impl Fn(T) + Send + 'static,
+    callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     let emitter = self.clone();
     tokio::spawn(async move {
-      emitter.wait::<T>().await.map(callback);
+      if let Some(event) = emitter.wait::<T>().await {
+        callback.call(event).await;
+      }
     })
   }
 

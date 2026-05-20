@@ -69,7 +69,7 @@ pub struct Me {
 }
 
 impl Me {
-  pub async fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
+  pub fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
     let self_player = players
       .iter()
       .find(|p| p.userid == me.id)
@@ -122,7 +122,7 @@ impl Me {
       gameid: self_player.gameid,
     };
 
-    s.start(start_hook_rx).await;
+    s.start(start_hook_rx);
 
     s
   }
@@ -141,7 +141,7 @@ impl Me {
     }
   }
 
-  pub async fn init(&self) {
+  pub fn init(&self) {
     self.hook.on::<recv::game::Match>(async |_| {
       // maybe do something here idk
     });
@@ -175,7 +175,7 @@ impl Me {
     });
   }
 
-  async fn start(&self, receiver: oneshot::Receiver<()>) {
+  fn start(&self, receiver: oneshot::Receiver<()>) {
     let me = self.clone();
     let handles = me.handles.clone();
 
@@ -215,7 +215,7 @@ impl Me {
     }));
   }
 
-  async fn flush_frames(&self) -> Vec<replay::Frame> {
+  fn flush_frames(&self) -> Vec<replay::Frame> {
     let mut state = self.state.lock();
 
     let frame = state.engine.frame;
@@ -359,7 +359,7 @@ impl Me {
     };
 
     if frame != 0 && frame % FRAMES_PER_MESSAGE == 0 {
-      let frames = self.flush_frames().await;
+      let frames = self.flush_frames();
       self
         .ribbon
         .emit(send::game::Replay {
@@ -512,14 +512,14 @@ impl Me {
       .unwrap_or("7-bag");
 
     let bag_kind = match bagtype_str {
-      "7-bag" | "bag7" => BagType::Bag7,
-      "14-bag" | "bag14" => BagType::Bag14,
+      "7-bag" => BagType::Bag7,
+      "14-bag" => BagType::Bag14,
       "classic" => BagType::Classic,
       "pairs" => BagType::Pairs,
       "total mayhem" => BagType::TotalMayhem,
-      "7+1" => BagType::Bag7Plus1,
-      "7+2" => BagType::Bag7Plus2,
-      "7+X" | "7+x" => BagType::Bag7PlusX,
+      "7+1-bag" => BagType::Bag7Plus1,
+      "7+2-bag" => BagType::Bag7Plus2,
+      "7+x-bag" => BagType::Bag7PlusX,
       _ => BagType::Bag7,
     };
 

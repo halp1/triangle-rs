@@ -29,16 +29,13 @@ impl Hook {
     }
   }
 
-  pub fn on<T: Event>(
-    &self,
-    callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
-  ) -> &Self {
+  pub fn on<T: Event>(&self, callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>) -> &Self {
     let handle = self.emitter.on(callback);
     self.handles.lock().push(handle);
     self
   }
 
-  pub fn once<T: Event>(&self, callback: impl Fn(T) + Send + 'static) -> &Self {
+  pub fn once<T: Event>(&self, callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>) -> &Self {
     let handle = self.emitter.once(callback);
     self.handles.lock().push(handle);
     self

@@ -523,14 +523,14 @@ fn parse_key(s: &str) -> Option<Key> {
 
 fn parse_bag_type(value: Option<&str>) -> BagType {
   match value.unwrap_or("7-bag") {
-    "7-bag" | "bag7" => BagType::Bag7,
-    "14-bag" | "bag14" => BagType::Bag14,
+    "7-bag" => BagType::Bag7,
+    "14-bag" => BagType::Bag14,
     "classic" => BagType::Classic,
     "pairs" => BagType::Pairs,
     "total mayhem" => BagType::TotalMayhem,
-    "7+1" => BagType::Bag7Plus1,
-    "7+2" => BagType::Bag7Plus2,
-    "7+X" | "7+x" => BagType::Bag7PlusX,
+    "7+1-bag" => BagType::Bag7Plus1,
+    "7+2-bag" => BagType::Bag7Plus2,
+    "7+x-bag" => BagType::Bag7PlusX,
     _ => BagType::Bag7,
   }
 }

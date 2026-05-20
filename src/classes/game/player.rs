@@ -42,7 +42,7 @@ pub struct Player {
 }
 
 impl Player {
-  pub async fn new(
+  pub fn new(
     ribbon: Ribbon,
     strategy: SpectatingStrategy,
     me: ReadyPlayer,

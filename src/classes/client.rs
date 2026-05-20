@@ -8,7 +8,6 @@ use crate::{
     game::Game,
     ribbon::{self, WrapError},
     room::Room,
-    social,
   },
   types::{
     events::{recv, send},
@@ -181,6 +180,7 @@ impl Client {
       user_agent: user_agent.clone(),
     };
 
+
     let session_id = format!("SESS-{}", rand::random::<u64>());
     let ribbon = Ribbon::new(ribbon::Params {
       handling: handling.clone(),
@@ -190,7 +190,6 @@ impl Client {
       user_agent: ribbon_config.user_agent.clone(),
     })
     .await?;
-
     ribbon.open();
 
     let res: Arc<Mutex<Option<std::result::Result<recv::client::Ready, String>>>> =
@@ -206,13 +205,14 @@ impl Client {
       }
     }
 
+
     let res = res
       .lock()
-      .take()
+        .take()
       .unwrap_or_else(|| Err("Failed to connect: unknown error".to_string()));
-
-    let ready = res.map_err(|e| ApiError::Server(e))?;
-
+  
+     let ready = res.map_err(|e| ApiError::Server(e))?;
+ 
     let user = ClientUser {
       id: me.id,
       username: me.username,
@@ -288,45 +288,26 @@ impl Client {
     //     );
     //   });
 
-    // let emitter = self.ribbon.emitter.clone();
-    // self.ribbon.emitter.on("notify", move |data: Value| {
-    //   if data.is_string() {
-    //     emitter.emit("client.notify", serde_json::json!({ "msg": data }));
-    //   } else if let Some(t) = data["type"].as_str() {
-    //     let msg = data["msg"].as_str().unwrap_or("").to_string();
-    //     match t {
-    //       "err" => {
-    //         emitter.emit("client.error", serde_json::json!(msg.clone()));
-    //         emitter.emit(
-    //           "client.notify",
-    //           serde_json::json!({ "msg": msg, "color": "#FF4200", "icon": "error" }),
-    //         );
-    //       }
-    //       "deny" => emitter.emit(
-    //         "client.notify",
-    //         serde_json::json!({ "msg": msg, "color": "#FF2200", "icon": "denied" }),
-    //       ),
-    //       "warn" => emitter.emit(
-    //         "client.notify",
-    //         serde_json::json!({ "msg": msg, "color": "#FFF43C", "icon": "warning" }),
-    //       ),
-    //       "announce" => emitter.emit(
-    //         "client.notify",
-    //         serde_json::json!({
-    //           "msg": msg,
-    //           "color": "#FFCC00",
-    //           "icon": "announcement",
-    //           "reason": data["reason"].as_str().map(str::to_string)
-    //         }),
-    //       ),
-    //       "ok" => emitter.emit(
-    //         "client.notify",
-    //         serde_json::json!({ "msg": msg, "color": "#6AFF3C", "icon": "ok" }),
-    //       ),
-    //       _ => emitter.emit("client.notify", serde_json::json!({ "msg": msg })),
-    //     }
-    //   }
-    // });
+    let ribbon = self.ribbon.clone();
+    self.ribbon.emitter.on::<recv::Notify>(async move |data| {
+      if data.0.is_string() {
+        ribbon
+          .emit(send::client::Notify(
+            data.0.as_str().unwrap_or("").to_string(),
+          ))
+          .await
+          .ok();
+      } else if let Some(t) = data.0["type"].as_str() {
+        let msg = data.0["msg"].as_str().unwrap_or("").to_string();
+        ribbon.emit(send::client::Notify(msg.clone())).await.ok();
+        match t {
+          "err" => {
+            ribbon.emit(send::client::Error(msg.clone())).await.ok();
+          }
+          _ => {}
+        }
+      }
+    });
 
     let state = self.state.clone();
 
@@ -344,7 +325,7 @@ impl Client {
 
   pub fn once<T: Event>(
     &self,
-    callback: impl Fn(T) + Send + Sync + 'static,
+    callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     self.ribbon.once::<T>(callback)
   }

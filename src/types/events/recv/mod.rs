@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use crate::macros::event;
 
 pub mod client;
@@ -24,5 +26,7 @@ event!(kick => Kick {
 event!(nope => Nope {
   reason: String,
 });
+
+event!(notify => Notify(Value));
 
 // TODO: packets

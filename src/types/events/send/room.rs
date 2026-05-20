@@ -12,13 +12,13 @@ event!(room.kick => Kick {
 
 event!(room.unban => Unban(String));
 
-event!(room.chat => Chat {
-  content: String,
-  pinned: bool
-});
-
 pub mod chat {
   use crate::macros::event;
+
+  event!(room.chat.send => Send {
+    content: String,
+    pinned: bool
+  });
 
   event!(room.chat.clear => Clear);
 }

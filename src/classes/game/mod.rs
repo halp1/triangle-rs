@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::{collections::HashMap, pin::Pin};
 
-use futures_util::future::join_all;
 use parking_lot::Mutex as PMutex;
 use serde_json::Value;
 
@@ -82,14 +81,14 @@ fn parse_kick_table(s: &str) -> KickTable {
 
 fn parse_bag_type(v: Option<&str>) -> BagType {
   match v.unwrap_or("7-bag") {
-    "7-bag" | "bag7" => BagType::Bag7,
-    "14-bag" | "bag14" => BagType::Bag14,
+    "7-bag" => BagType::Bag7,
+    "14-bag" => BagType::Bag14,
     "classic" => BagType::Classic,
     "pairs" => BagType::Pairs,
     "total mayhem" => BagType::TotalMayhem,
-    "7+1" => BagType::Bag7Plus1,
-    "7+2" => BagType::Bag7Plus2,
-    "7+X" | "7+x" => BagType::Bag7PlusX,
+    "7+1-bag" => BagType::Bag7Plus1,
+    "7+2-bag" => BagType::Bag7Plus2,
+    "7+x-bag" => BagType::Bag7PlusX,
     _ => BagType::Bag7,
   }
 }
@@ -151,19 +150,17 @@ impl Game {
     let me_in_game = raw_players.iter().find(|p| p.userid == user.id).is_some();
 
     let me = if me_in_game {
-      Some(Me::new(ribbon.clone(), user.clone(), raw_players.clone()).await)
+      Some(Me::new(ribbon.clone(), user.clone(), raw_players.clone()))
     } else {
       None
     };
 
-    let players = join_all(
-      raw_players
-        .iter()
-        .map(|p| Player::new(ribbon.clone(), strategy, p.clone(), raw_players.clone())),
-    )
-    .await;
+    let players = raw_players
+      .iter()
+      .map(|p| Player::new(ribbon.clone(), strategy, p.clone(), raw_players.clone()))
+      .collect();
 
-    ribbon.set_faster_ping(true).await;
+    ribbon.set_faster_ping(true);
 
     let s = Self {
       ribbon: ribbon.clone(),
@@ -178,16 +175,16 @@ impl Game {
       raw_players: Arc::new(raw_players),
     };
 
-    s.start_spectating_loop().await;
+    s.start_spectating_loop();
 
     if let Some(me) = &s.me {
-      me.init().await;
+      me.init();
     }
 
     s
   }
 
-  async fn start_spectating_loop(&self) {
+  fn start_spectating_loop(&self) {
     let game = self.clone();
 
     self.state.lock().spectating_loop_handle.lock().replace(tokio::task::spawn(async move {
@@ -778,7 +775,7 @@ impl Game {
       player.destroy().await;
     }
 
-    self.ribbon.set_faster_ping(false).await;
+    self.ribbon.set_faster_ping(false);
 
     self
       .state

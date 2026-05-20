@@ -432,19 +432,22 @@ impl Bag for Bag7PlusX {
 
 // ─── BagType enum and factory ──────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub enum BagType {
+  #[serde(rename = "7-bag")]
   Bag7,
+  #[serde(rename = "14-bag")]
   Bag14,
+  #[serde(rename = "classic")]
   Classic,
+  #[serde(rename = "pairs")]
   Pairs,
   #[serde(rename = "total mayhem")]
   TotalMayhem,
-  #[serde(rename = "7+1")]
+  #[serde(rename = "7+1-bag")]
   Bag7Plus1,
-  #[serde(rename = "7+2")]
+  #[serde(rename = "7+2-bag")]
   Bag7Plus2,
-  #[serde(rename = "7+X")]
+  #[serde(rename = "7+x-bag")]
   Bag7PlusX,
 }
 
