@@ -806,6 +806,7 @@ impl Ribbon {
               self.clone().process_message(packet.clone()).await;
             }
           }
+          tokio::task::yield_now().await;
         }
       }
 

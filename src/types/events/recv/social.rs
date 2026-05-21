@@ -22,5 +22,5 @@ event!(social.invite => Invite {
   sender: String,
   roomid: String,
   roomname: String,
-  roomname_safe: String,
+  roomname_safe: Option<String>,
 });

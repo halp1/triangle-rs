@@ -63,15 +63,24 @@ where
   }
 }
 
-#[derive(Debug)]
 pub struct EventEmitter {
   tx: Arc<ArcSwapOption<broadcast::Sender<(String, Value)>>>,
+  sync_taps: Arc<parking_lot::Mutex<Vec<Box<dyn Fn(&str, &Value) + Send + Sync>>>>,
+}
+
+impl std::fmt::Debug for EventEmitter {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("EventEmitter")
+      .field("tx", &self.tx)
+      .finish()
+  }
 }
 
 impl Clone for EventEmitter {
   fn clone(&self) -> Self {
     Self {
       tx: self.tx.clone(),
+      sync_taps: self.sync_taps.clone(),
     }
   }
 }
@@ -81,6 +90,7 @@ impl EventEmitter {
     let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
     Self {
       tx: Arc::new(ArcSwapOption::new(Some(Arc::new(tx)))),
+      sync_taps: Arc::new(parking_lot::Mutex::new(Vec::new())),
     }
   }
 
@@ -88,7 +98,14 @@ impl EventEmitter {
     self.tx.load().as_deref().map(|tx| tx.subscribe())
   }
 
+  pub fn tap_sync(&self, f: impl Fn(&str, &Value) + Send + Sync + 'static) {
+    self.sync_taps.lock().push(Box::new(f));
+  }
+
   pub fn emit_raw(&self, command: &str, data: Value) {
+    for tap in self.sync_taps.lock().iter() {
+      tap(command, &data);
+    }
     if let Some(tx) = self.tx.load().as_deref() {
       let _ = tx.send((command.to_string(), data));
     }

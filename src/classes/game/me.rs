@@ -69,7 +69,12 @@ pub struct Me {
 }
 
 impl Me {
-  pub fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
+  pub fn new(
+    ribbon: Ribbon,
+    me: ClientUser,
+    players: Vec<ReadyPlayer>,
+    initial_iges: Vec<ige::IGE>,
+  ) -> Self {
     let self_player = players
       .iter()
       .find(|p| p.userid == me.id)
@@ -98,7 +103,7 @@ impl Me {
         target: TargetingStrategy::Even,
         pause_iges: false,
         force_pause_iges: false,
-        ige_queue: Vec::new(),
+        ige_queue: initial_iges,
         slow_tick_warning: false,
         is_practice: false,
         over: false,

@@ -10,7 +10,7 @@ use crate::{
       recv::{self},
       send,
     },
-    game::{Options as GameOptions, SpectatingStrategy},
+    game::{Options as GameOptions, SpectatingStrategy, ige},
     room::{
       Autostart, Bracket, Match, Player, SetConfigItem, SetConfigItemRaw, SetConfigValue, State,
       Type,
@@ -198,13 +198,27 @@ impl Room {
     let game = self.game.clone();
     let me = self.me.clone();
 
+    let ige_pre_buf: Arc<Mutex<Option<Vec<ige::IGE>>>> = Arc::new(Mutex::new(Some(Vec::new())));
+    let ige_tap_buf = ige_pre_buf.clone();
+    self.ribbon.emitter.tap_sync(move |cmd, data| {
+      if cmd == "game.replay.ige" {
+        if let Ok(event) = serde_json::from_value::<recv::game::replay::IGE>(data.clone()) {
+          if let Some(v) = &mut *ige_tap_buf.lock() {
+            v.extend(event.iges);
+          }
+        }
+      }
+    });
+
     self.hook.on::<recv::game::Ready>(async move |data| {
       let spectating_strategy = state.lock().spectating_strategy.clone();
+      let initial_iges = ige_pre_buf.lock().take().unwrap_or_default();
       let g = Game::new(
         ribbon.clone(),
         me,
         data.players.clone(),
         spectating_strategy,
+        initial_iges,
       );
 
       game.lock().replace(g);
