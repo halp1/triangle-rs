@@ -2082,7 +2082,6 @@ impl Engine {
     }
   }
 
-  /// Clones with a clean event emitter.
   pub fn pure_clone(&self) -> Self {
     let mut c = self.clone();
     c.events = EventEmitter::new();

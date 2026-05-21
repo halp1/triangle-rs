@@ -11,8 +11,6 @@ use crate::{
 type KickList = Vec<(i32, i32)>;
 type KickMap = HashMap<&'static str, KickList>;
 
-//  "none" | "SRS" | "SRS+" | "SRS-X" | "TETRA-X" | "NRS" | "ARS" | "ASC"
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum KickTable {
   #[serde(rename = "none")]
@@ -97,7 +95,6 @@ fn color_map_standard() -> HashMap<MinoExt, MinoColor> {
 pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::new(|| {
   let mut tables = HashMap::new();
 
-  // ─── SRS ───────────────────────────────────────────────────────────────
   tables.insert(
     KickTable::SRS,
     KickTableData {
@@ -254,7 +251,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── SRS+ ──────────────────────────────────────────────────────────────
   tables.insert(
     KickTable::SRSPlus,
     KickTableData {
@@ -411,7 +407,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── SRS-X ─────────────────────────────────────────────────────────────
   let srsx_180_general = km(&[
     (
       "02",
@@ -770,7 +765,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── TETRA-X ───────────────────────────────────────────────────────────
   let tetrax_general = km(&[
     (
       "01",
@@ -963,7 +957,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── NRS ───────────────────────────────────────────────────────────────
   tables.insert(
     KickTable::NRS,
     KickTableData {
@@ -1027,7 +1020,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── ARS ───────────────────────────────────────────────────────────────
   tables.insert(
     KickTable::ARS,
     KickTableData {
@@ -1121,7 +1113,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── ASC ───────────────────────────────────────────────────────────────
   let asc_kicks_ccw = km(&[
     (
       "01",
@@ -1366,7 +1357,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
     },
   );
 
-  // ─── none ──────────────────────────────────────────────────────────────
   tables.insert(
     KickTable::None,
     KickTableData {
@@ -1397,7 +1387,6 @@ pub static KICK_TABLES: LazyLock<HashMap<KickTable, KickTableData>> = LazyLock::
   tables
 });
 
-// ─── Corner table ──────────────────────────────────────────────────────────
 pub const CORNER_TABLE_Z: [[(i32, i32); 4]; 4] = [
   [(-2, -1), (1, -1), (2, 0), (-1, 0)],
   [(0, -1), (1, -2), (0, 2), (1, 1)],
@@ -1426,7 +1415,6 @@ pub const CORNER_TABLE_J: [[(i32, i32); 4]; 4] = [
   [(-1, -1), (1, -1), (1, 1), (-1, 0)],
 ];
 
-// T corners include indices of adjacent faces used for spin detection
 pub const CORNER_TABLE_T: [[(i32, i32, u8, u8); 4]; 4] = [
   [(-1, -1, 3, 0), (1, -1, 0, 1), (1, 1, 1, 2), (-1, 1, 2, 3)],
   [(-1, -1, 3, 0), (1, -1, 0, 1), (1, 1, 1, 2), (-1, 1, 2, 3)],
@@ -1434,7 +1422,6 @@ pub const CORNER_TABLE_T: [[(i32, i32, u8, u8); 4]; 4] = [
   [(-1, -1, 3, 0), (1, -1, 0, 1), (1, 1, 1, 2), (-1, 1, 2, 3)],
 ];
 
-// ─── Spin bonus rules ──────────────────────────────────────────────────────
 pub const ALL_STANDARD_TYPES: &[&str] = &[
   "i1", "i2", "i3", "l3", "i5", "z", "l", "o", "s", "i", "j", "t", "oo",
 ];
