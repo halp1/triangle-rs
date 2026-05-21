@@ -35,7 +35,6 @@ fn standard_pieces() -> [Mino; 7] {
   ]
 }
 
-// ─── Bag7 ──────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Bag7 {
   rng: Rng,
@@ -78,7 +77,6 @@ impl Bag for Bag7 {
   }
 }
 
-// ─── Bag14 ─────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Bag14 {
   rng: Rng,
@@ -125,7 +123,6 @@ impl Bag for Bag14 {
   }
 }
 
-// ─── Classic ───────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Classic {
   rng: Rng,
@@ -175,7 +172,6 @@ impl Bag for Classic {
   }
 }
 
-// ─── Pairs ─────────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Pairs {
   rng: Rng,
@@ -226,7 +222,6 @@ impl Bag for Pairs {
   }
 }
 
-// ─── Random (TotalMayhem) ──────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct TotalMayhem {
   rng: Rng,
@@ -269,7 +264,6 @@ impl Bag for TotalMayhem {
   }
 }
 
-// ─── Bag7Plus1 ─────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Bag7Plus1 {
   rng: Rng,
@@ -315,7 +309,6 @@ impl Bag for Bag7Plus1 {
   }
 }
 
-// ─── Bag7Plus2 ─────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Bag7Plus2 {
   rng: Rng,
@@ -363,7 +356,6 @@ impl Bag for Bag7Plus2 {
   }
 }
 
-// ─── Bag7PlusX ─────────────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct Bag7PlusX {
   rng: Rng,
@@ -430,7 +422,6 @@ impl Bag for Bag7PlusX {
   }
 }
 
-// ─── BagType enum and factory ──────────────────────────────────────────────
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BagType {
   #[serde(rename = "7-bag")]

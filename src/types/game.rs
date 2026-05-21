@@ -212,7 +212,6 @@ pub enum Buffering {
   Tap,
 }
 
-/// Handling settings sent within `server.authorize`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Handling {
   pub arr: f64,
@@ -586,18 +585,6 @@ impl TryFrom<u8> for TargetingStrategy {
     }
   }
 }
-
-// | "moveLeft"
-// | "moveRight"
-// | "rotateCW"
-// | "rotateCCW"
-// | "rotate180"
-// | "softDrop"
-// | "hardDrop"
-// | "hold"
-// | "undo"
-// | "redo"
-// | "retry"
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Key {
