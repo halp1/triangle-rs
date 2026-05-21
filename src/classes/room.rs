@@ -10,7 +10,7 @@ use crate::{
       recv::{self},
       send,
     },
-    game::{Options as GameOptions, SpectatingStrategy, ige},
+    game::{Options as GameOptions, SpectatingStrategy},
     room::{
       Autostart, Bracket, Match, Player, SetConfigItem, SetConfigItemRaw, SetConfigValue, State,
       Type,
@@ -198,27 +198,13 @@ impl Room {
     let game = self.game.clone();
     let me = self.me.clone();
 
-    let ige_pre_buf: Arc<Mutex<Option<Vec<ige::IGE>>>> = Arc::new(Mutex::new(Some(Vec::new())));
-    let ige_tap_buf = ige_pre_buf.clone();
-    self.ribbon.emitter.tap_sync(move |cmd, data| {
-      if cmd == "game.replay.ige" {
-        if let Ok(event) = serde_json::from_value::<recv::game::replay::IGE>(data.clone()) {
-          if let Some(v) = &mut *ige_tap_buf.lock() {
-            v.extend(event.iges);
-          }
-        }
-      }
-    });
-
-    self.hook.on::<recv::game::Ready>(async move |data| {
+    self.hook.on_sync::<recv::game::Ready>(move |data| {
       let spectating_strategy = state.lock().spectating_strategy.clone();
-      let initial_iges = ige_pre_buf.lock().take().unwrap_or_default();
       let g = Game::new(
         ribbon.clone(),
-        me,
+        me.clone(),
         data.players.clone(),
         spectating_strategy,
-        initial_iges,
       );
 
       game.lock().replace(g);
@@ -230,28 +216,32 @@ impl Room {
 
         let r#match = state.lock().match_config.clone();
 
-        ribbon
-          .emit(send::client::game::Start {
-            multi: r#match.ft > 1 || r#match.wb > 1,
-            first_to: r#match.ft,
-            win_by: r#match.wb,
-            golden_point: r#match.gp,
-            players: data
-              .players
-              .iter()
-              .map(|p| {
-                (
-                  p.userid.clone(),
-                  p.options["username"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                )
-              })
-              .collect(),
-          })
-          .await
-          .ok();
+        let ribbon = ribbon.clone();
+
+        tokio::spawn(async move {
+          ribbon
+            .emit(send::client::game::Start {
+              multi: r#match.ft > 1 || r#match.wb > 1,
+              first_to: r#match.ft,
+              win_by: r#match.wb,
+              golden_point: r#match.gp,
+              players: data
+                .players
+                .iter()
+                .map(|p| {
+                  (
+                    p.userid.clone(),
+                    p.options["username"]
+                      .as_str()
+                      .unwrap_or_default()
+                      .to_string(),
+                  )
+                })
+                .collect(),
+            })
+            .await
+            .ok();
+        });
       }
     });
 
@@ -447,7 +437,7 @@ impl Room {
     });
   }
 
-  pub async fn leave(&mut self) {
+  pub async fn leave(&self) {
     self
       .ribbon
       .wrap::<recv::room::Leave>(send::room::Leave {})
@@ -487,13 +477,13 @@ impl Room {
       .await
   }
 
-  pub async fn ban(&mut self, id: &str) -> Result<recv::room::player::Remove, ribbon::WrapError> {
+  pub async fn ban(&self, id: &str) -> Result<recv::room::player::Remove, ribbon::WrapError> {
     self
       .kick_with_duration(id, Duration::from_secs(2592e3 as u64))
       .await
   }
 
-  pub async fn unban(&mut self, id: &str) {
+  pub async fn unban(&self, id: &str) {
     self
       .ribbon
       .emit(send::room::Unban(id.to_string()))
@@ -501,7 +491,7 @@ impl Room {
       .ok();
   }
 
-  pub async fn chat(&mut self, message: &str) -> Result<recv::room::Chat, ribbon::WrapError> {
+  pub async fn chat(&self, message: &str) -> Result<recv::room::Chat, ribbon::WrapError> {
     self
       .ribbon
       .wrap::<recv::room::Chat>(send::room::chat::Send {
@@ -524,14 +514,14 @@ impl Room {
       .await
   }
 
-  pub async fn clear_chat(&mut self) -> Result<recv::room::chat::Clear, ribbon::WrapError> {
+  pub async fn clear_chat(&self) -> Result<recv::room::chat::Clear, ribbon::WrapError> {
     self
       .ribbon
       .wrap::<recv::room::chat::Clear>(send::room::chat::Clear {})
       .await
   }
 
-  pub async fn set_id(&mut self, id: &str) -> Result<recv::room::Update, ribbon::WrapError> {
+  pub async fn set_id(&self, id: &str) -> Result<recv::room::Update, ribbon::WrapError> {
     self
       .ribbon
       .wrap::<recv::room::Update>(send::room::SetId(id.to_ascii_uppercase()))
@@ -605,10 +595,17 @@ impl Room {
   }
 
   /// Treats switching to observer as spectator
-  pub async fn switch(
-    &mut self,
-    bracket: Bracket,
-  ) -> Result<recv::room::update::Bracket, ribbon::WrapError> {
+  pub async fn switch(&mut self, bracket: Bracket) -> Result<(), ribbon::WrapError> {
+    if self
+      .state
+      .lock()
+      .players
+      .iter()
+      .any(|p| p.id == self.me.id && p.bracket == bracket)
+    {
+      return Ok(());
+    }
+
     self
       .ribbon
       .wrap::<recv::room::update::Bracket>(send::room::bracket::Switch(match bracket {
@@ -616,6 +613,7 @@ impl Room {
         _ => bracket,
       }))
       .await
+      .map(|_| ())
   }
 
   pub async fn move_player(

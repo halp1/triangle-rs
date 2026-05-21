@@ -5,7 +5,9 @@ use parking_lot::Mutex;
 
 use crate::{
   classes::{
-    ClientUser, Ribbon, ribbon::Hook, social::relationship::{DMError, Relationship}
+    ClientUser, Ribbon,
+    ribbon::Hook,
+    social::relationship::{DMError, Relationship},
   },
   types::{
     events::{recv, send},
@@ -36,7 +38,7 @@ fn process_relationship(
 #[derive(Debug, Clone)]
 pub struct Social {
   ribbon: Ribbon,
-	hook: Hook,
+  hook: Hook,
 
   me: ClientUser,
 
@@ -64,7 +66,7 @@ impl Social {
 
     let social = Self {
       ribbon: ribbon.clone(),
-			hook: ribbon.hook(),
+      hook: ribbon.hook(),
       me,
       online: Arc::new(Mutex::new(init.total_online)),
       friends: Arc::new(Mutex::new(
@@ -294,7 +296,11 @@ impl Social {
     self.ribbon.api.users.get(user_id).await
   }
 
-  pub async fn dm(&self, user_id: impl ToString, content: impl ToString) -> Result<recv::social::DM, DMError> {
+  pub async fn dm(
+    &self,
+    user_id: impl ToString,
+    content: impl ToString,
+  ) -> Result<recv::social::DM, DMError> {
     relationship::send_dm(&self.ribbon, user_id, content).await
   }
 
@@ -386,7 +392,7 @@ impl Social {
       .ok();
   }
 
-	pub fn destroy(&self) {
-		self.hook.destroy();
-	}
+  pub fn destroy(&self) {
+    self.hook.destroy();
+  }
 }

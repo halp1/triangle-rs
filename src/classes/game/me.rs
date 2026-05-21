@@ -69,12 +69,7 @@ pub struct Me {
 }
 
 impl Me {
-  pub fn new(
-    ribbon: Ribbon,
-    me: ClientUser,
-    players: Vec<ReadyPlayer>,
-    initial_iges: Vec<ige::IGE>,
-  ) -> Self {
+  pub fn new(ribbon: Ribbon, me: ClientUser, players: Vec<ReadyPlayer>) -> Self {
     let self_player = players
       .iter()
       .find(|p| p.userid == me.id)
@@ -103,7 +98,7 @@ impl Me {
         target: TargetingStrategy::Even,
         pause_iges: false,
         force_pause_iges: false,
-        ige_queue: initial_iges,
+        ige_queue: Vec::new(),
         slow_tick_warning: false,
         is_practice: false,
         over: false,
@@ -147,7 +142,7 @@ impl Me {
   }
 
   pub fn init(&self) {
-    self.hook.on::<recv::game::Match>(async |_| {
+    self.hook.on_sync::<recv::game::Match>(|_| {
       // maybe do something here idk
     });
     let me: Me = self.clone();
@@ -168,13 +163,13 @@ impl Me {
 
     let me = self.clone();
 
-    self.hook.on::<recv::game::Abort>(async move |_| {
+    self.hook.on_sync::<recv::game::Abort>(move |_| {
       me.handles.lock().drain(..).for_each(|h| h.abort());
     });
 
     let me = self.clone();
 
-    self.hook.on::<recv::game::replay::IGE>(async move |ige| {
+    self.hook.on_sync::<recv::game::replay::IGE>(move |ige| {
       me.state.lock().ige_queue.extend(ige.iges.iter().cloned());
       me.flush_iges();
     });

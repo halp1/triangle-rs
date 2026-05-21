@@ -117,7 +117,7 @@ pub struct Request {
 
 #[derive(Debug, Error)]
 pub enum ApiError {
-	#[error("Request error: {0}")]
+  #[error("Request error: {0}")]
   Request(reqwest::Error),
   #[error("Parse error: {0}")]
   Parse(String),

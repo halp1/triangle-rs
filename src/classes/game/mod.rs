@@ -30,7 +30,7 @@ use crate::{
   },
   types::game::{
     Buffering, ComboTable, GarbageBlocking, GarbageTargetBonus, Handling, Passthrough, ReadyPlayer,
-    SpectateTarget, SpectatingStrategy, Spin, SpinBonuses, ige,
+    SpectateTarget, SpectatingStrategy, Spin, SpinBonuses,
   },
 };
 
@@ -146,12 +146,11 @@ impl Game {
     user: ClientUser,
     raw_players: Vec<ReadyPlayer>,
     strategy: SpectatingStrategy,
-    initial_iges: Vec<ige::IGE>,
   ) -> Self {
     let me_in_game = raw_players.iter().find(|p| p.userid == user.id).is_some();
 
     let me = if me_in_game {
-      Some(Me::new(ribbon.clone(), user.clone(), raw_players.clone(), initial_iges))
+      Some(Me::new(ribbon.clone(), user.clone(), raw_players.clone()))
     } else {
       None
     };

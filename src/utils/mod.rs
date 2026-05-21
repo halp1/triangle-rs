@@ -3,8 +3,8 @@ pub mod constants;
 pub mod docs;
 pub mod events;
 pub mod logger;
-pub mod version;
 pub mod pack;
+pub mod version;
 
 pub use docs::{doc_link, troubleshooting_doc_link};
 pub use events::EventEmitter;

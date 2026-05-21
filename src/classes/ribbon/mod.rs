@@ -1230,6 +1230,10 @@ impl Ribbon {
     self.emitter.on(callback)
   }
 
+  pub fn on_sync<T: Event>(&self, f: impl Fn(T) + Send + Sync + 'static) -> u64 {
+    self.emitter.on_sync(f)
+  }
+
   pub fn once<T: Event>(
     &self,
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,

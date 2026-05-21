@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{engine::{queue::bag::BagType, utils::KickTable}, macros::partial};
+use crate::{
+  engine::{queue::bag::BagType, utils::KickTable},
+  macros::partial,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]

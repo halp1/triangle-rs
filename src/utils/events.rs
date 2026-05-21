@@ -1,5 +1,6 @@
 use std::future::{Future, Ready, ready};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use arc_swap::ArcSwapOption;
 use serde_json::Value;
@@ -65,7 +66,8 @@ where
 
 pub struct EventEmitter {
   tx: Arc<ArcSwapOption<broadcast::Sender<(String, Value)>>>,
-  sync_taps: Arc<parking_lot::Mutex<Vec<Box<dyn Fn(&str, &Value) + Send + Sync>>>>,
+  sync_taps: Arc<parking_lot::Mutex<Vec<(u64, Arc<dyn Fn(&str, &Value) + Send + Sync>)>>>,
+  sync_tap_counter: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for EventEmitter {
@@ -81,6 +83,7 @@ impl Clone for EventEmitter {
     Self {
       tx: self.tx.clone(),
       sync_taps: self.sync_taps.clone(),
+      sync_tap_counter: self.sync_tap_counter.clone(),
     }
   }
 }
@@ -91,6 +94,7 @@ impl EventEmitter {
     Self {
       tx: Arc::new(ArcSwapOption::new(Some(Arc::new(tx)))),
       sync_taps: Arc::new(parking_lot::Mutex::new(Vec::new())),
+      sync_tap_counter: Arc::new(AtomicU64::new(0)),
     }
   }
 
@@ -98,12 +102,33 @@ impl EventEmitter {
     self.tx.load().as_deref().map(|tx| tx.subscribe())
   }
 
-  pub fn tap_sync(&self, f: impl Fn(&str, &Value) + Send + Sync + 'static) {
-    self.sync_taps.lock().push(Box::new(f));
+  pub fn on_sync<T: Event>(&self, f: impl Fn(T) + Send + Sync + 'static) -> u64 {
+    let id = self.sync_tap_counter.fetch_add(1, Ordering::Relaxed);
+    self.sync_taps.lock().push((
+      id,
+      Arc::new(move |cmd, data| {
+        if cmd == T::NAME {
+          if let Ok(parsed) = serde_json::from_value::<T>(data.clone()) {
+            f(parsed);
+          }
+        }
+      }),
+    ));
+    id
+  }
+
+  pub fn remove_sync_tap(&self, id: u64) {
+    self.sync_taps.lock().retain(|(tap_id, _)| *tap_id != id);
   }
 
   pub fn emit_raw(&self, command: &str, data: Value) {
-    for tap in self.sync_taps.lock().iter() {
+    let taps: Vec<Arc<dyn Fn(&str, &Value) + Send + Sync>> = self
+      .sync_taps
+      .lock()
+      .iter()
+      .map(|(_, f)| f.clone())
+      .collect();
+    for tap in taps {
       tap(command, &data);
     }
     if let Some(tx) = self.tx.load().as_deref() {

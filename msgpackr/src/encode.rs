@@ -1,4 +1,4 @@
-use crate::error::{Result};
+use crate::error::Result;
 use crate::options::{Float32Mode, PackOptions};
 use crate::value::{typed_array_codes, Value};
 use std::sync::Arc;
@@ -9,7 +9,7 @@ fn mult10_table() -> &'static [f64; 256] {
   TABLE.get_or_init(|| {
     let mut t = [0f64; 256];
     for (i, item) in t.iter_mut().enumerate() {
-			#[allow(clippy::approx_constant)]
+      #[allow(clippy::approx_constant)]
       let exp = 45.15 - (i as f64) * 0.30103;
       *item = 10f64.powf(exp.floor());
     }

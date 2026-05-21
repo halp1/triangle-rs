@@ -216,7 +216,7 @@ impl Bits {
     Ok(self)
   }
 
-	pub fn into_bytes(self) -> Vec<u8> {
-		self.buffer
-	}
+  pub fn into_bytes(self) -> Vec<u8> {
+    self.buffer
+  }
 }

@@ -180,7 +180,6 @@ impl Client {
       user_agent: user_agent.clone(),
     };
 
-
     let session_id = format!("SESS-{}", rand::random::<u64>());
     let ribbon = Ribbon::new(ribbon::Params {
       handling: handling.clone(),
@@ -201,19 +200,18 @@ impl Client {
       }
 
       _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
-				ribbon.destroy().await;
+        ribbon.destroy().await;
         res.lock().replace(Err("Failed to connect: Connection timeout".to_string()));
       }
     }
 
-
     let res = res
       .lock()
-        .take()
+      .take()
       .unwrap_or_else(|| Err("Failed to connect: unknown error".to_string()));
-  
-     let ready = res.map_err(|e| ApiError::Server(e))?;
- 
+
+    let ready = res.map_err(|e| ApiError::Server(e))?;
+
     let user = ClientUser {
       id: me.id,
       username: me.username,
@@ -322,6 +320,10 @@ impl Client {
     callback: impl AsyncFnOnce(T) -> () + AsyncCallback<T>,
   ) -> tokio::task::JoinHandle<()> {
     self.ribbon.on(callback)
+  }
+
+  pub fn on_sync<T: Event>(&self, f: impl Fn(T) + Send + Sync + 'static) -> u64 {
+    self.ribbon.on_sync(f)
   }
 
   pub fn once<T: Event>(

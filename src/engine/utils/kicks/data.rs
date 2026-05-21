@@ -15,7 +15,7 @@ type KickMap = HashMap<&'static str, KickList>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum KickTable {
-	#[serde(rename = "none")]
+  #[serde(rename = "none")]
   None,
   #[serde(rename = "SRS")]
   SRS,
@@ -25,11 +25,11 @@ pub enum KickTable {
   SRSX,
   #[serde(rename = "TETRA-X")]
   TetraX,
-	#[serde(rename = "NRS")]
+  #[serde(rename = "NRS")]
   NRS,
-	#[serde(rename = "ARS")]
+  #[serde(rename = "ARS")]
   ARS,
-	#[serde(rename = "ASC")]
+  #[serde(rename = "ASC")]
   ASC,
 }
 

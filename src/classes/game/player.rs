@@ -110,19 +110,17 @@ impl Player {
 
     let state = player.state.clone();
 
-    player
-      .hook
-      .on::<recv::game::Replay>(async move |event| {
-        let mut state = state.lock();
-        if event.gameid != gameid
-          || state.state != SpectatingState::Active
-          || state.engine.topped_out()
-        {
-          return;
-        }
+    player.hook.on::<recv::game::Replay>(async move |event| {
+      let mut state = state.lock();
+      if event.gameid != gameid
+        || state.state != SpectatingState::Active
+        || state.engine.topped_out()
+      {
+        return;
+      }
 
-        state.queue.append(&mut event.frames.clone());
-      });
+      state.queue.append(&mut event.frames.clone());
+    });
 
     player
   }
@@ -167,7 +165,11 @@ impl Player {
       state.state = SpectatingState::Inactive;
       state.queue.clear();
     }
-    self.ribbon.emit(send::game::scope::End(self.gameid)).await.ok();
+    self
+      .ribbon
+      .emit(send::game::scope::End(self.gameid))
+      .await
+      .ok();
   }
 
   pub async fn destroy(&mut self) {
