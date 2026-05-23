@@ -107,6 +107,7 @@ pub enum SpinBonuses {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[repr(u8)]
 pub enum Spin {
   #[serde(rename = "none")]
   None,
